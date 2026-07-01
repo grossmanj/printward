@@ -261,10 +261,17 @@ function isPrintJobDocumentRequest(requestUrl) {
     && Boolean(requestUrl.searchParams.get('token'));
 }
 
+function isPublicAssetRequest(req, requestUrl) {
+  return ['GET', 'HEAD'].includes(req.method || 'GET')
+    && !requestUrl.pathname.startsWith('/api/')
+    && /\.(css|js|mjs|ico|svg|png|jpe?g|webp|woff2?)$/i.test(requestUrl.pathname);
+}
+
 function requireLogin(req, res, requestUrl, auth) {
   if (
     !auth.enabled
     || isAuthenticatedRequest(req, auth)
+    || isPublicAssetRequest(req, requestUrl)
     || isPrintCompletionCallback(requestUrl)
     || isPrintJobDocumentRequest(requestUrl)
   ) {

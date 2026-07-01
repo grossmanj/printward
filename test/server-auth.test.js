@@ -92,6 +92,10 @@ test('auth blocks app/API until login succeeds', async (t) => {
   const health = await request(handler, '/api/health');
   assert.equal(health.status, 401);
 
+  const css = await request(handler, '/styles.css');
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get('content-type'), /text\/css/);
+
   const login = await request(handler, '/login', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
