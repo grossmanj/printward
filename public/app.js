@@ -17,7 +17,6 @@ const state = {
 
 const elements = {
   storageLabel: document.querySelector('#storageLabel'),
-  agentStatus: document.querySelector('#agentStatus'),
   refreshButton: document.querySelector('#refreshButton'),
   settingsButton: document.querySelector('#settingsButton'),
   searchInput: document.querySelector('#searchInput'),
@@ -530,16 +529,17 @@ function renderOrders() {
 
 async function loadHealth() {
   const health = await api('/api/health');
-  if (health.mode === 'mock') {
-    elements.storageLabel.textContent = 'Mock bucket';
-    return;
-  }
+  elements.storageLabel.textContent = environmentLabel(health);
+}
 
-  const primary = `${health.bucket}${health.prefix ? `/${health.prefix}` : ''}`;
-  const freight = health.freightBucket
-    ? `${health.freightBucket === health.bucket ? '' : `${health.freightBucket}/`}${health.freightPrefix || 'freight'}`
-    : '';
-  elements.storageLabel.textContent = freight ? `${primary} + ${freight}` : primary;
+function environmentLabel(health) {
+  if (health.mode === 'mock') return 'Kvalitetsfisk MOCK';
+
+  const prefix = String(health.prefix || '').replace(/^\/+|\/+$/g, '');
+  if (prefix === '2') return 'Kvalitetsfisk LIVE';
+  if (prefix === '9992') return 'Kvalitetsfisk DEMO';
+  if (prefix) return `Kvalitetsfisk ${prefix}`;
+  return 'Kvalitetsfisk';
 }
 
 function configuredDocumentTypes() {
@@ -603,11 +603,6 @@ async function checkAgent() {
   } finally {
     window.clearTimeout(timeout);
   }
-
-  elements.agentStatus.textContent = state.agentOnline ? 'Agent online' : 'Agent offline';
-  elements.agentStatus.classList.toggle('online', state.agentOnline);
-  elements.agentStatus.classList.toggle('offline', !state.agentOnline);
-  elements.agentStatus.classList.remove('neutral');
 
   if (state.agentOnline) await loadPrinters();
 }
