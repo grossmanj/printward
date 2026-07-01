@@ -1,0 +1,21 @@
+{
+  "name": "printward",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "agent": "node src/local-agent.js",
+    "sync:freight": "node src/freight-sync-job.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@google-cloud/datastore": "^9.2.1",
+    "mssql": "^11.0.1",
+    "pdf-lib": "^1.17.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

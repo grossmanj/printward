@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Printward</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">P</span>
+        <div>
+          <strong>Printward</strong>
+          <span id="storageLabel">Loading bucket</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="agentStatus" class="agent-status neutral">Agent unknown</span>
+        <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+        <button id="settingsButton" class="button primary" type="button">Settings</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="summary-grid" aria-label="Print summary">
+        <div class="stat">
+          <span>Total orders</span>
+          <strong id="totalOrders">0</strong>
+        </div>
+        <div class="stat">
+          <span>Ready packets</span>
+          <strong id="readyOrders">0</strong>
+        </div>
+        <div class="stat">
+          <span>Ready dispatch combos</span>
+          <strong id="readyDispatchCombos">0 / 0</strong>
+        </div>
+        <div class="stat">
+          <span>Pending docs</span>
+          <strong id="pendingDocuments">0</strong>
+        </div>
+        <div class="stat">
+          <span>Printed packets</span>
+          <strong id="printedOrders">0</strong>
+        </div>
+      </section>
+
+      <section class="controls">
+        <div class="search-row">
+          <label class="field search-field">
+            <span>Search order</span>
+            <input id="searchInput" type="search" placeholder="Order, customer, car, item">
+          </label>
+          <div class="field dispatch-date-field">
+            <span>Dispatch date</span>
+            <div class="date-nav">
+              <input id="dispatchDateInput" type="date">
+              <button id="todayButton" class="button secondary" type="button">Today</button>
+              <button id="nextDayButton" class="button secondary" type="button">Next day</button>
+            </div>
+          </div>
+          <label class="field compact-field sort-field">
+            <span>Sort</span>
+            <select id="sortInput">
+              <option value="dispatch">Dispatch plan</option>
+              <option value="latest">Document update</option>
+              <option value="dispatchDate">Dispatch date</option>
+              <option value="deliveryMethod">Delivery method</option>
+              <option value="dispatchTime">Departure time</option>
+              <option value="customer">Customer</option>
+              <option value="order">Order no.</option>
+            </select>
+          </label>
+          <label class="field compact-field group-field">
+            <span>Group</span>
+            <select id="groupInput">
+              <option value="dispatchSlot">Dispatch slot</option>
+              <option value="dispatchDate">Dispatch date</option>
+              <option value="deliveryMethod">Delivery method</option>
+              <option value="dispatchTime">Departure time</option>
+              <option value="none">None</option>
+              <option value="customer">Customer</option>
+              <option value="packet">Packet status</option>
+            </select>
+          </label>
+          <div class="tabs" role="tablist" aria-label="Order status">
+            <button class="tab active" data-status="all" type="button">All</button>
+            <button class="tab" data-status="ready" type="button">Ready</button>
+            <button class="tab" data-status="pending" type="button">Needs print</button>
+            <button class="tab" data-status="reprint" type="button">Updated</button>
+            <button class="tab" data-status="missing" type="button">Missing</button>
+            <button class="tab" data-status="printed" type="button">Printed</button>
+          </div>
+        </div>
+        <div class="bulkbar">
+          <label class="checkbox-line">
+            <input id="selectAll" type="checkbox">
+            <span id="selectionLabel">No orders selected</span>
+          </label>
+          <div class="bulk-actions">
+            <button id="printSelectedButton" class="button primary" type="button" disabled>Print selected</button>
+            <button id="markPrintedButton" class="button secondary" type="button" disabled>Mark printed</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="table-shell">
+        <table>
+          <thead>
+            <tr>
+              <th class="select-column"></th>
+              <th>Order & customer</th>
+              <th>Dispatch</th>
+              <th>Lines</th>
+              <th>Documents</th>
+              <th>Doc update</th>
+              <th>Packet</th>
+              <th class="actions-column">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="ordersBody">
+            <tr>
+              <td colspan="8" class="empty">Loading orders</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+      <form id="settingsForm" class="settings-card">
+        <div class="panel-heading">
+          <div>
+            <strong>Print defaults</strong>
+            <span>Saved per internal user</span>
+          </div>
+          <button id="closeSettingsButton" class="icon-button" type="button" aria-label="Close settings">x</button>
+        </div>
+
+        <label class="field">
+          <span>User</span>
+          <input id="userInput" autocomplete="username">
+        </label>
+
+        <label class="field">
+          <span>Local agent URL</span>
+          <input id="agentUrlInput">
+        </label>
+
+        <label class="field">
+          <span>Default printer</span>
+          <input id="printerInput" list="printerList" placeholder="Use system default">
+          <datalist id="printerList"></datalist>
+        </label>
+
+        <div class="split-fields">
+          <label class="field">
+            <span>Copies</span>
+            <input id="copiesInput" type="number" min="1" max="20">
+          </label>
+          <label class="field">
+            <span>Color</span>
+            <select id="colorModeInput">
+              <option value="auto">Printer default</option>
+              <option value="color">Color</option>
+              <option value="grayscale">Grayscale</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="checkbox-line">
+          <input id="duplexInput" type="checkbox">
+          <span>Two-sided printing</span>
+        </label>
+
+        <label class="checkbox-line">
+          <input id="stapleInput" type="checkbox">
+          <span>Staple each order packet</span>
+        </label>
+
+        <label class="field">
+          <span>CUPS staple option</span>
+          <input id="stapleOptionInput" placeholder="StapleLocation=UpperLeft">
+        </label>
+
+        <fieldset class="document-fieldset">
+          <legend>Documents in each packet</legend>
+          <label class="checkbox-line">
+            <input class="doc-type-input" type="checkbox" value="packingSlip">
+            <span>Packing slip</span>
+          </label>
+          <label class="checkbox-line">
+            <input class="doc-type-input" type="checkbox" value="attachment">
+            <span>Attachment</span>
+          </label>
+          <label class="checkbox-line">
+            <input class="doc-type-input" type="checkbox" value="freight">
+            <span>Freight document</span>
+          </label>
+        </fieldset>
+
+        <div class="panel-actions">
+          <button class="button secondary" id="testAgentButton" type="button">Test agent</button>
+          <button class="button primary" type="submit">Save defaults</button>
+        </div>
+      </form>
+    </aside>
+
+    <div id="manualDialog" class="dialog-backdrop" hidden>
+      <div class="dialog">
+        <div class="panel-heading">
+          <div>
+            <strong>Manual print packet</strong>
+            <span>Agent is unavailable, open PDFs and print from the browser</span>
+          </div>
+          <button id="closeManualButton" class="icon-button" type="button" aria-label="Close manual print">x</button>
+        </div>
+        <div id="manualDocumentList" class="manual-list"></div>
+        <div class="panel-actions">
+          <button id="openDocumentsButton" class="button secondary" type="button">Open documents</button>
+          <button id="manualCompleteButton" class="button primary" type="button">Mark printed</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
