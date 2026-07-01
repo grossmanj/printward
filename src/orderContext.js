@@ -278,6 +278,7 @@ export class SqlServerOrderContextClient {
       SELECT TOP (@limit) o.OrdNo
       FROM Ord o
       WHERE o.DelDt = @delDt
+        AND o.TrTp = 1
       ORDER BY ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo;
     `;
 
@@ -334,7 +335,7 @@ export class SqlServerOrderContextClient {
         ISNULL(o.YrRef, '') AS YrRef,
         ISNULL(o.ReqNo, '') AS ReqNo,
         ISNULL(o.Inf2, '') AS Inf2,
-        ISNULL(customer.Nm, '') AS CustomerName,
+        ISNULL(NULLIF(o.Nm, ''), ISNULL(customer.Nm, '')) AS CustomerName,
         CASE WHEN freight.OrdNo IS NULL THEN 0 ELSE 1 END AS FreightRequired,
         ISNULL(freight.Val1, 0) AS FreightStatus,
         ISNULL(freight.Txt1, '') AS FreightConsignmentFresh,
@@ -366,7 +367,8 @@ export class SqlServerOrderContextClient {
           AND info.Val1 IN (${freightStatusSql})
           AND (ISNULL(info.Txt1, '') <> '' OR ISNULL(info.Txt2, '') <> '')
         ORDER BY info.OrdNo
-      ) freight;
+      ) freight
+      WHERE o.TrTp = 1;
 
       SELECT
         l.OrdNo,

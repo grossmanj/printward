@@ -5,6 +5,7 @@ import {
   attachOrderContexts,
   dispatchPriorityToTime,
   isoDateToVismaDate,
+  SqlServerOrderContextClient,
   vismaDateTimeToIso,
   vismaDateToIsoDate
 } from '../src/orderContext.js';
@@ -30,4 +31,35 @@ test('attaches missing order context safely', () => {
   assert.deepEqual(orders[0].context.freightConsignmentNumbers, []);
   assert.equal(orders[0].context.deliveryMethodName, '');
   assert.equal(orders[0].context.dispatchTime, null);
+});
+
+test('SQL order context filters sales transaction headers', async () => {
+  const queries = [];
+  const client = new SqlServerOrderContextClient({
+    maxOrdersPerQuery: 500,
+    freightBookedStatuses: [2, 8]
+  });
+
+  client.getSql = async () => ({ Int: 'Int' });
+  client.getPool = async () => ({
+    request() {
+      return {
+        input() {},
+        async query(sql) {
+          queries.push(sql);
+          return {
+            recordset: [],
+            recordsets: [[], [], []]
+          };
+        }
+      };
+    }
+  });
+
+  await client.getByDeliveryDate('2026-07-01');
+  await client.fetchBatch([1956705]);
+
+  assert.match(queries[0], /WHERE o\.DelDt = @delDt\s+AND o\.TrTp = 1/);
+  assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1;/);
+  assert.match(queries[1], /ISNULL\(NULLIF\(o\.Nm, ''\), ISNULL\(customer\.Nm, ''\)\) AS CustomerName/);
 });
