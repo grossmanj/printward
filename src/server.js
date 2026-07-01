@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
@@ -26,6 +27,15 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function visibleDocumentTypes(config) {
   const visibleKeys = (config.documentTypes.visible || DOCUMENT_ORDER)
     .filter((type) => DOCUMENT_ORDER.includes(type));
@@ -44,6 +54,15 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function sendHtml(res, statusCode, body, headers = {}) {
+  res.writeHead(statusCode, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    ...headers
+  });
+  res.end(body);
+}
+
 function sendError(res, error) {
   const statusCode = error.statusCode || 500;
   sendJson(res, statusCode, {
@@ -51,11 +70,16 @@ function sendError(res, error) {
   });
 }
 
-async function readJsonBody(req) {
+async function readBodyText(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJsonBody(req) {
+  const text = await readBodyText(req);
+  if (!text) return {};
+  return JSON.parse(text);
 }
 
 function getOrigin(req) {
@@ -64,19 +88,239 @@ function getOrigin(req) {
   return `${protocol}://${host}`;
 }
 
+function randomToken() {
+  return randomBytes(32).toString('base64url');
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function signValue(value, secret) {
+  return createHmac('sha256', secret).update(value).digest('base64url');
+}
+
+function parseCookies(req) {
+  const cookies = new Map();
+  for (const item of String(req.headers.cookie || '').split(';')) {
+    const [rawName, ...rawValue] = item.trim().split('=');
+    if (!rawName) continue;
+    cookies.set(rawName, decodeURIComponent(rawValue.join('=') || ''));
+  }
+  return cookies;
+}
+
+function createSessionToken(auth) {
+  const payload = Buffer.from(JSON.stringify({
+    user: auth.username,
+    exp: Math.floor(Date.now() / 1000) + auth.maxAgeSeconds
+  })).toString('base64url');
+  return `${payload}.${signValue(payload, auth.sessionSecret)}`;
+}
+
+function verifySessionToken(token, auth) {
+  const [payload, signature] = String(token || '').split('.');
+  if (!payload || !signature) return false;
+  if (!safeEqual(signature, signValue(payload, auth.sessionSecret))) return false;
+
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return session.user === auth.username && Number(session.exp || 0) > Math.floor(Date.now() / 1000);
+  } catch {
+    return false;
+  }
+}
+
+function isAuthenticatedRequest(req, auth) {
+  if (!auth?.enabled) return true;
+  return verifySessionToken(parseCookies(req).get(auth.cookieName), auth);
+}
+
+function cookieAttributes(req, auth, expires = false) {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https';
+  const maxAge = expires ? 0 : auth.maxAgeSeconds;
+  return [
+    `Max-Age=${maxAge}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    isHttps ? 'Secure' : ''
+  ].filter(Boolean).join('; ');
+}
+
+function sessionCookie(req, auth) {
+  return `${auth.cookieName}=${encodeURIComponent(createSessionToken(auth))}; ${cookieAttributes(req, auth)}`;
+}
+
+function expiredSessionCookie(req, auth) {
+  return `${auth.cookieName}=; ${cookieAttributes(req, auth, true)}`;
+}
+
+function loginPage(auth, error = '') {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Printward Login</title>
+    <style>
+      :root { color-scheme: light; --text: #14212a; --muted: #5c6d77; --line: #ccd8de; --primary: #0f6b6f; --bg: #edf2f4; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: linear-gradient(180deg, #e5eef0 0, var(--bg) 260px); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { width: min(380px, calc(100vw - 32px)); background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 14px 34px rgba(20, 33, 42, 0.09); padding: 24px; }
+      .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+      .mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 8px; background: var(--primary); color: #fff; font-weight: 800; }
+      h1 { margin: 0; font-size: 20px; line-height: 1.1; }
+      label { display: grid; gap: 7px; margin-top: 14px; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+      input { min-height: 40px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); font: inherit; padding: 8px 10px; }
+      input:focus { border-color: var(--primary); outline: 3px solid rgba(17, 109, 110, 0.15); }
+      button { width: 100%; min-height: 42px; margin-top: 18px; border: 1px solid var(--primary); border-radius: 7px; background: var(--primary); color: #fff; cursor: pointer; font: inherit; font-weight: 800; }
+      .error { margin: 0 0 14px; padding: 10px 12px; border: 1px solid rgba(180, 35, 24, 0.22); border-radius: 7px; background: rgba(180, 35, 24, 0.08); color: #b42318; font-size: 13px; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand"><span class="mark">P</span><h1>Printward</h1></div>
+      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+      <form method="post" action="/login">
+        <label>Username <input name="username" autocomplete="username" value="${escapeHtml(auth.username)}" required></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" autofocus required></label>
+        <button type="submit">Log in</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+}
+
+function wantsJson(req, requestUrl) {
+  return requestUrl.pathname.startsWith('/api/') || String(req.headers.accept || '').includes('application/json');
+}
+
+function redirectToLogin(res) {
+  res.writeHead(303, { location: '/login', 'cache-control': 'no-store' });
+  res.end();
+}
+
+async function handleAuthRoute(req, res, requestUrl, auth) {
+  if (requestUrl.pathname === '/logout') {
+    res.writeHead(303, {
+      location: '/login',
+      'set-cookie': expiredSessionCookie(req, auth),
+      'cache-control': 'no-store'
+    });
+    res.end();
+    return true;
+  }
+
+  if (requestUrl.pathname !== '/login') return false;
+
+  if (req.method === 'GET') {
+    if (isAuthenticatedRequest(req, auth)) {
+      res.writeHead(303, { location: '/', 'cache-control': 'no-store' });
+      res.end();
+      return true;
+    }
+    sendHtml(res, 200, loginPage(auth, requestUrl.searchParams.get('error') ? 'Invalid username or password.' : ''));
+    return true;
+  }
+
+  if (req.method === 'POST') {
+    const form = new URLSearchParams(await readBodyText(req));
+    const username = form.get('username') || '';
+    const password = form.get('password') || '';
+    if (safeEqual(username, auth.username) && safeEqual(password, auth.password)) {
+      res.writeHead(303, {
+        location: '/',
+        'set-cookie': sessionCookie(req, auth),
+        'cache-control': 'no-store'
+      });
+      res.end();
+      return true;
+    }
+
+    res.writeHead(303, { location: '/login?error=1', 'cache-control': 'no-store' });
+    res.end();
+    return true;
+  }
+
+  sendJson(res, 405, { error: 'Method not allowed.' });
+  return true;
+}
+
+function isPrintCompletionCallback(requestUrl) {
+  return /^\/api\/print-jobs\/[^/]+\/complete$/.test(requestUrl.pathname)
+    && Boolean(requestUrl.searchParams.get('token'));
+}
+
+function isPrintJobDocumentRequest(requestUrl) {
+  return requestUrl.pathname === '/api/documents'
+    && Boolean(requestUrl.searchParams.get('jobId'))
+    && Boolean(requestUrl.searchParams.get('token'));
+}
+
+function requireLogin(req, res, requestUrl, auth) {
+  if (
+    !auth.enabled
+    || isAuthenticatedRequest(req, auth)
+    || isPrintCompletionCallback(requestUrl)
+    || isPrintJobDocumentRequest(requestUrl)
+  ) {
+    return false;
+  }
+
+  if (wantsJson(req, requestUrl)) {
+    sendJson(res, 401, { error: 'Login required.' });
+  } else {
+    redirectToLogin(res);
+  }
+  return true;
+}
+
 function buildManifest(req, job) {
   const origin = getOrigin(req);
+  const callbackToken = job.callbackToken ? `?token=${encodeURIComponent(job.callbackToken)}` : '';
+  const documentTokenParams = job.callbackToken
+    ? `&jobId=${encodeURIComponent(job.id)}&token=${encodeURIComponent(job.callbackToken)}`
+    : '';
   return {
     jobId: job.id,
-    callbackUrl: `${origin}/api/print-jobs/${job.id}/complete`,
+    callbackUrl: `${origin}/api/print-jobs/${job.id}/complete${callbackToken}`,
     orders: job.orders.map((order) => ({
       ...order,
       documents: order.documents.map((document) => ({
         ...document,
-        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}`
+        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}`
       }))
     }))
   };
+}
+
+function jobIncludesDocument(job, name, source) {
+  return (job.orders || []).some((order) => {
+    return (order.documents || []).some((document) => {
+      return document.name === name && (document.source || 'primary') === source;
+    });
+  });
+}
+
+async function isAuthorizedDocumentRequest(req, requestUrl, config, store) {
+  if (!config.auth.enabled || isAuthenticatedRequest(req, config.auth)) return true;
+
+  const jobId = requestUrl.searchParams.get('jobId') || '';
+  const token = requestUrl.searchParams.get('token') || '';
+  const name = requestUrl.searchParams.get('name') || '';
+  const source = requestUrl.searchParams.get('source') || 'primary';
+  const job = jobId ? await store.getJob(jobId) : null;
+
+  return Boolean(
+    job
+    && job.callbackToken
+    && safeEqual(token, job.callbackToken)
+    && jobIncludesDocument(job, name, source)
+  );
 }
 
 function normalizedDocumentTypesForConfig(documentTypes, config) {
@@ -495,7 +739,8 @@ async function handleApi(req, res, requestUrl, context) {
       printerName: body.printerName || body.options?.printerName || '',
       options: body.options || {},
       orders: snapshots,
-      notes: body.notes || ''
+      notes: body.notes || '',
+      callbackToken: randomToken()
     });
 
     sendJson(res, 201, {
@@ -519,7 +764,18 @@ async function handleApi(req, res, requestUrl, context) {
   const completeMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/complete$/);
   if (req.method === 'POST' && completeMatch) {
     const body = await readJsonBody(req);
-    const job = await store.completeJob(completeMatch[1], body);
+    const jobId = completeMatch[1];
+    const token = requestUrl.searchParams.get('token') || body.token || '';
+
+    if (config.auth.enabled && !isAuthenticatedRequest(req, config.auth)) {
+      const existingJob = await store.getJob(jobId);
+      if (!existingJob || !existingJob.callbackToken || !safeEqual(token, existingJob.callbackToken)) {
+        sendJson(res, 401, { error: 'Login required.' });
+        return;
+      }
+    }
+
+    const job = await store.completeJob(jobId, body);
     if (!job) {
       sendJson(res, 404, { error: 'Print job not found.' });
       return;
@@ -534,6 +790,11 @@ async function handleApi(req, res, requestUrl, context) {
     const source = requestUrl.searchParams.get('source') || 'primary';
     if (!name) {
       sendJson(res, 400, { error: 'Document object name is required.' });
+      return;
+    }
+
+    if (!(await isAuthorizedDocumentRequest(req, requestUrl, config, store))) {
+      sendJson(res, 401, { error: 'Login required.' });
       return;
     }
 
@@ -580,7 +841,11 @@ async function serveStatic(req, res, requestUrl, staticDir) {
   }
 }
 
-export function createServer(config = loadConfig()) {
+export function createRequestHandler(config = loadConfig()) {
+  if (config.auth.enabled && !config.auth.password) {
+    throw new Error('PRINTWARD_LOGIN_PASSWORD is required when PRINTWARD_AUTH_ENABLED=true.');
+  }
+
   const storage = createStorageClient(config);
   const orderContext = createOrderContextClient(config);
   const store = createStateStore(config);
@@ -592,10 +857,18 @@ export function createServer(config = loadConfig()) {
     });
   }
 
-  return http.createServer(async (req, res) => {
+  return async (req, res) => {
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
 
     try {
+      if (config.auth.enabled && await handleAuthRoute(req, res, requestUrl, config.auth)) {
+        return;
+      }
+
+      if (config.auth.enabled && requireLogin(req, res, requestUrl, config.auth)) {
+        return;
+      }
+
       if (requestUrl.pathname.startsWith('/api/')) {
         await handleApi(req, res, requestUrl, { config, storage, store, orderContext, ordersCache });
         return;
@@ -605,7 +878,11 @@ export function createServer(config = loadConfig()) {
     } catch (error) {
       sendError(res, error);
     }
-  });
+  };
+}
+
+export function createServer(config = loadConfig()) {
+  return http.createServer(createRequestHandler(config));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

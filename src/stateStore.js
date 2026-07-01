@@ -126,7 +126,8 @@ export class StateStore {
       printerName: input.printerName || '',
       options: input.options || {},
       orders: input.orders || [],
-      notes: input.notes || ''
+      notes: input.notes || '',
+      callbackToken: input.callbackToken || ''
     };
 
     await this.update((state) => {
@@ -305,7 +306,8 @@ export class DatastoreStateStore {
       printerName: input.printerName || '',
       options: input.options || {},
       orders: input.orders || [],
-      notes: input.notes || ''
+      notes: input.notes || '',
+      callbackToken: input.callbackToken || ''
     };
 
     await this.saveEntity(STORE_KINDS.job, job.id, job, [

@@ -38,6 +38,14 @@ export function loadConfig(env = process.env) {
     mockOrderContextFile: env.MOCK_ORDER_CONTEXT || path.join(projectRoot, 'data', 'mock-order-context.json'),
     ordersCacheMs: Number(env.ORDERS_CACHE_MS || 60_000),
     ordersCacheWarmup: String(env.ORDERS_CACHE_WARMUP || 'true').toLowerCase() !== 'false',
+    auth: {
+      enabled: String(env.PRINTWARD_AUTH_ENABLED || (env.PRINTWARD_LOGIN_PASSWORD ? 'true' : 'false')).toLowerCase() === 'true',
+      username: env.PRINTWARD_LOGIN_USER || 'operator',
+      password: env.PRINTWARD_LOGIN_PASSWORD || '',
+      sessionSecret: env.PRINTWARD_SESSION_SECRET || env.PRINTWARD_LOGIN_PASSWORD || '',
+      cookieName: env.PRINTWARD_COOKIE_NAME || 'printward_session',
+      maxAgeSeconds: Number(env.PRINTWARD_SESSION_MAX_AGE_SECONDS || 43_200)
+    },
     stateStore: {
       mode: env.STATE_STORE || 'json',
       projectId: env.DATASTORE_PROJECT_ID || env.GOOGLE_CLOUD_PROJECT || env.GCLOUD_PROJECT || env.GCP_PROJECT || env.PROJECT_ID || '',
