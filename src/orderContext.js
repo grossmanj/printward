@@ -87,8 +87,9 @@ function normalizeOrderContext(row, lines = []) {
     row.freightConsignmentFresh ?? row.FreightConsignmentFresh,
     row.freightConsignmentFrozen ?? row.FreightConsignmentFrozen
   ]);
-  const freightRequired = Boolean(Number(row.freightRequired ?? row.FreightRequired ?? 0))
-    || freightConsignmentNumbers.length > 0;
+  const distributorNo = Number(row.distributorNo ?? row.SupNo ?? 0) || 0;
+  const distributorName = String(row.distributorName ?? row.DistributorName ?? '').trim();
+  const freightRequired = distributorNo > 0;
 
   return {
     available: true,
@@ -106,6 +107,8 @@ function normalizeOrderContext(row, lines = []) {
     yourReference: String(row.yourReference ?? row.YrRef ?? '').trim(),
     requisitionNo: String(row.requisitionNo ?? row.ReqNo ?? '').trim(),
     consignmentNo: String(row.consignmentNo ?? row.ConsNo ?? '').trim(),
+    distributorNo,
+    distributorName,
     freightRequired,
     freightStatus: Number(row.freightStatus ?? row.FreightStatus ?? 0) || null,
     freightConsignmentNumbers,
@@ -327,6 +330,7 @@ export class SqlServerOrderContextClient {
         o.OrdTp,
         ISNULL(o.Nm, '') AS Nm,
         o.OrdBasNo,
+        ISNULL(o.SupNo, 0) AS SupNo,
         o.DelMt,
         o.DelPri,
         ISNULL(deliveryMethod.Txt, '') AS DeliveryMethodName,
@@ -336,7 +340,8 @@ export class SqlServerOrderContextClient {
         ISNULL(o.ReqNo, '') AS ReqNo,
         ISNULL(o.Inf2, '') AS Inf2,
         ISNULL(NULLIF(o.Nm, ''), ISNULL(customer.Nm, '')) AS CustomerName,
-        CASE WHEN freight.OrdNo IS NULL THEN 0 ELSE 1 END AS FreightRequired,
+        ISNULL(distributor.Nm, '') AS DistributorName,
+        CASE WHEN ISNULL(o.SupNo, 0) > 0 THEN 1 ELSE 0 END AS FreightRequired,
         ISNULL(freight.Val1, 0) AS FreightStatus,
         ISNULL(freight.Txt1, '') AS FreightConsignmentFresh,
         ISNULL(freight.Txt2, '') AS FreightConsignmentFrozen
@@ -352,6 +357,12 @@ export class SqlServerOrderContextClient {
         WHERE a.CustNo = o.CustNo
         ORDER BY a.ActNo
       ) customer
+      OUTER APPLY (
+        SELECT TOP 1 a.Nm
+        FROM Actor a
+        WHERE a.SupNo = o.SupNo
+        ORDER BY a.ActNo
+      ) distributor
       OUTER APPLY (
         SELECT TOP 1
           info.OrdNo,
@@ -487,6 +498,8 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       yourReference: '',
       requisitionNo: '',
       consignmentNo: '',
+      distributorNo: 0,
+      distributorName: '',
       freightRequired: false,
       freightStatus: null,
       freightConsignmentNumbers: [],

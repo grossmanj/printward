@@ -8,7 +8,9 @@ const state = {
   status: 'all',
   sort: localStorage.getItem('printward:sort') || 'dispatch',
   group: localStorage.getItem('printward:group') || 'dispatchSlot',
+  distributor: localStorage.getItem('printward:distributor') || 'all',
   deliveryDate: todayIsoDate(),
+  visibleOrders: [],
   defaults: {},
   user: localStorage.getItem('printward:user') || 'operator',
   agentOnline: false,
@@ -24,6 +26,7 @@ const elements = {
   todayButton: document.querySelector('#todayButton'),
   nextDayButton: document.querySelector('#nextDayButton'),
   sortInput: document.querySelector('#sortInput'),
+  distributorInput: document.querySelector('#distributorInput'),
   groupInput: document.querySelector('#groupInput'),
   selectAll: document.querySelector('#selectAll'),
   selectionLabel: document.querySelector('#selectionLabel'),
@@ -57,8 +60,8 @@ const elements = {
   toast: document.querySelector('#toast')
 };
 
-const SORT_VALUES = new Set(['dispatch', 'latest', 'dispatchDate', 'deliveryMethod', 'dispatchTime', 'customer', 'order']);
-const GROUP_VALUES = new Set(['dispatchSlot', 'dispatchDate', 'deliveryMethod', 'dispatchTime', 'none', 'customer', 'packet']);
+const SORT_VALUES = new Set(['dispatch', 'latest', 'dispatchDate', 'deliveryMethod', 'dispatchTime', 'distributor', 'customer', 'order']);
+const GROUP_VALUES = new Set(['dispatchSlot', 'dispatchDate', 'deliveryMethod', 'dispatchTime', 'distributor', 'none', 'customer', 'packet']);
 
 if (!SORT_VALUES.has(state.sort)) state.sort = 'dispatch';
 if (!GROUP_VALUES.has(state.group)) state.group = 'dispatchSlot';
@@ -140,6 +143,17 @@ function dispatchLabel(context = {}) {
   return `${date} / ${time} / ${method}`;
 }
 
+function distributorKey(context = {}) {
+  const distributorNo = Number(context.distributorNo || 0);
+  return distributorNo > 0 ? `external:${distributorNo}` : 'internal';
+}
+
+function distributorLabel(context = {}) {
+  const distributorNo = Number(context.distributorNo || 0);
+  if (distributorNo <= 0) return 'Internal';
+  return context.distributorName || `Distributor ${distributorNo}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -169,6 +183,7 @@ function packetLabel(status) {
 
 function documentChip(order, type, document) {
   if (!document) {
+    if (!(order.requiredTypes || []).includes(type.key)) return '';
     return `<span class="chip status-missing">${type.shortLabel}: Missing</span>`;
   }
 
@@ -184,12 +199,46 @@ function documentChip(order, type, document) {
   ].join('');
 }
 
+function distributorOptions(orders) {
+  const options = new Map([['all', 'All'], ['internal', 'Internal']]);
+  for (const order of orders) {
+    const key = distributorKey(order.context);
+    if (key !== 'internal' && !options.has(key)) {
+      options.set(key, distributorLabel(order.context));
+    }
+  }
+
+  return Array.from(options.entries()).sort((left, right) => {
+    if (left[0] === 'all') return -1;
+    if (right[0] === 'all') return 1;
+    if (left[0] === 'internal') return -1;
+    if (right[0] === 'internal') return 1;
+    return compareText(left[1], right[1]);
+  });
+}
+
+function renderDistributorFilter() {
+  const options = distributorOptions(state.orders);
+  const valid = new Set(options.map(([value]) => value));
+  if (!valid.has(state.distributor)) state.distributor = 'all';
+
+  elements.distributorInput.innerHTML = options
+    .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
+    .join('');
+  elements.distributorInput.value = state.distributor;
+}
+
+function filteredOrders() {
+  if (state.distributor === 'all') return [...state.orders];
+  return state.orders.filter((order) => distributorKey(order.context) === state.distributor);
+}
+
 function selectedOrderNumbers() {
   return Array.from(state.selected);
 }
 
 function pruneSelectionToVisibleOrders() {
-  const visible = new Set(state.orders.map((order) => order.orderNumber));
+  const visible = new Set(state.visibleOrders.map((order) => order.orderNumber));
   for (const orderNumber of state.selected) {
     if (!visible.has(orderNumber)) state.selected.delete(orderNumber);
   }
@@ -241,6 +290,13 @@ function sortedOrders() {
         || compareText(left.orderNumber, right.orderNumber);
     }
 
+    if (state.sort === 'distributor') {
+      return compareText(distributorLabel(left.context), distributorLabel(right.context))
+        || compareText(left.context?.deliveryDate || '9999-99-99', right.context?.deliveryDate || '9999-99-99')
+        || compareText(left.context?.dispatchTime || '99:99', right.context?.dispatchTime || '99:99')
+        || compareText(left.orderNumber, right.orderNumber);
+    }
+
     if (state.sort === 'customer') {
       return compareText(left.context?.customerName, right.context?.customerName)
         || compareText(left.orderNumber, right.orderNumber);
@@ -262,6 +318,7 @@ function groupLabel(order) {
   if (state.group === 'dispatchDate') return order.context?.deliveryDate ? formatDate(order.context.deliveryDate) : 'No dispatch date';
   if (state.group === 'deliveryMethod') return order.context?.deliveryMethodName || (order.context?.deliveryMethod ? `Method ${order.context.deliveryMethod}` : 'No delivery method');
   if (state.group === 'dispatchTime') return order.context?.dispatchTime || 'No departure time';
+  if (state.group === 'distributor') return distributorLabel(order.context);
   if (state.group === 'customer') return order.context?.customerName || 'No customer context';
   if (state.group === 'packet') return packetLabel(order.packetStatus);
   return '';
@@ -437,21 +494,24 @@ function renderSelection() {
   elements.selectionLabel.textContent = count === 0 ? 'No orders selected' : `${count} order${count === 1 ? '' : 's'} selected`;
   elements.printSelectedButton.disabled = count === 0;
   elements.markPrintedButton.disabled = count === 0;
-  elements.selectAll.checked = state.orders.length > 0 && state.orders.every((order) => state.selected.has(order.orderNumber));
+  elements.selectAll.checked = state.visibleOrders.length > 0 && state.visibleOrders.every((order) => state.selected.has(order.orderNumber));
   elements.selectAll.indeterminate = count > 0 && !elements.selectAll.checked;
 }
 
 function renderOrders() {
   state.groupIndex = new Map();
+  state.visibleOrders = filteredOrders();
 
-  if (state.orders.length === 0) {
-    elements.ordersBody.innerHTML = `<tr><td colspan="8" class="empty">No orders match ${escapeHtml(formatDate(state.deliveryDate))}</td></tr>`;
+  if (state.visibleOrders.length === 0) {
+    const distributorText = state.distributor === 'all' ? '' : ` for ${distributorLabel(state.orders.find((order) => distributorKey(order.context) === state.distributor)?.context || {})}`;
+    elements.ordersBody.innerHTML = `<tr><td colspan="8" class="empty">No orders match ${escapeHtml(formatDate(state.deliveryDate))}${escapeHtml(distributorText)}</td></tr>`;
     renderSelection();
     return;
   }
 
   const rows = [];
-  const ordered = sortedOrders();
+  const visibleOrderNumbers = new Set(state.visibleOrders.map((order) => order.orderNumber));
+  const ordered = sortedOrders().filter((order) => visibleOrderNumbers.has(order.orderNumber));
   const groups = buildOrderGroups(ordered);
   const rowsToRender = state.group === 'none'
     ? [{ orders: ordered }]
@@ -471,6 +531,7 @@ function renderOrders() {
 
       const context = order.context || {};
       const customer = context.customerName || context.deliveryName || 'No SQL context';
+      const distributor = distributorLabel(context);
       const refs = [context.yourReference, context.requisitionNo, context.consignmentNo]
         .filter(Boolean)
         .join(' / ');
@@ -490,6 +551,7 @@ function renderOrders() {
             <div class="order-meta">
               <a class="order-link" href="/api/orders/${encodeURIComponent(order.orderNumber)}" target="_blank" rel="noreferrer">${escapeHtml(order.orderNumber)}</a>
               <small>${escapeHtml(customer)}${context.customerNo ? ` (#${escapeHtml(context.customerNo)})` : ''}</small>
+              <small>${escapeHtml(distributor)}${context.distributorNo ? ` (#${escapeHtml(context.distributorNo)})` : ''}</small>
               ${refs ? `<small>${escapeHtml(refs)}</small>` : ''}
             </div>
           </td>
@@ -580,6 +642,8 @@ async function loadOrders(options = {}) {
   state.summary = payload.summary;
   state.documentTypes = payload.documentTypes;
   state.contextStatus = payload.contextStatus || {};
+  renderDistributorFilter();
+  state.visibleOrders = filteredOrders();
   pruneSelectionToVisibleOrders();
   syncDocumentTypeControls();
   renderDateControls();
@@ -785,6 +849,7 @@ async function setDeliveryDate(value) {
 function bindEvents() {
   elements.sortInput.value = state.sort;
   elements.groupInput.value = state.group;
+  elements.distributorInput.value = state.distributor;
   renderDateControls();
 
   elements.refreshButton.addEventListener('click', async () => {
@@ -812,6 +877,13 @@ function bindEvents() {
   elements.sortInput.addEventListener('change', () => {
     state.sort = elements.sortInput.value;
     localStorage.setItem('printward:sort', state.sort);
+    renderOrders();
+  });
+
+  elements.distributorInput.addEventListener('change', () => {
+    state.distributor = elements.distributorInput.value;
+    localStorage.setItem('printward:distributor', state.distributor);
+    state.selected.clear();
     renderOrders();
   });
 
@@ -866,7 +938,7 @@ function bindEvents() {
 
   elements.selectAll.addEventListener('change', () => {
     if (elements.selectAll.checked) {
-      for (const order of state.orders) state.selected.add(order.orderNumber);
+      for (const order of state.visibleOrders) state.selected.add(order.orderNumber);
     } else {
       state.selected.clear();
     }

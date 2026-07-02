@@ -143,10 +143,10 @@ select {
 
 .search-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(320px, auto) minmax(150px, 0.55fr) minmax(150px, 0.55fr);
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, auto) minmax(200px, 0.7fr) minmax(180px, 0.55fr) minmax(180px, 0.55fr);
   grid-template-areas:
-    "search date sort group"
-    "tabs tabs tabs tabs";
+    "search date distributor sort group"
+    "tabs tabs tabs tabs tabs";
   align-items: end;
   gap: 12px 14px;
   padding: 14px 14px 12px;
@@ -179,6 +179,10 @@ select {
   grid-area: sort;
 }
 
+.distributor-field {
+  grid-area: distributor;
+}
+
 .group-field {
   grid-area: group;
 }
@@ -207,6 +211,12 @@ select {
 .field {
   display: grid;
   gap: 7px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-width: 0;
 }
 
 .field span,
@@ -712,6 +722,7 @@ tr:last-child td {
     grid-template-areas:
       "date"
       "search"
+      "distributor"
       "sort"
       "group"
       "tabs";

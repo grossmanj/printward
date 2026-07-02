@@ -133,6 +133,7 @@ export async function fetchBookedFreightShipments(config) {
       o.DelDt,
       o.DelMt,
       o.DelPri,
+      ISNULL(o.SupNo, 0) AS SupNo,
       ISNULL(deliveryMethod.Txt, '') AS DeliveryMethodName
     FROM FreeInf1 f
     LEFT JOIN Ord o ON o.OrdNo = f.OrdNo
@@ -146,6 +147,8 @@ export async function fetchBookedFreightShipments(config) {
       AND f.FrInfTp3 = @frInfTp3
       AND f.Val1 IN (${statusSql})
       AND f.OrdNo <> 0
+      AND ISNULL(o.TrTp, 0) = 1
+      AND ISNULL(o.SupNo, 0) > 0
       AND (ISNULL(f.Txt1, '') <> '' OR ISNULL(f.Txt2, '') <> '')
       AND (@fromDelDt = 0 OR ISNULL(o.DelDt, 0) >= @fromDelDt)
       AND (@toDelDt = 0 OR ISNULL(o.DelDt, 0) <= @toDelDt)
