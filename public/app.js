@@ -566,7 +566,7 @@ function renderOrders() {
           </td>
           <td>
             <div class="line-meta">
-              <span>${Number(context.lineCount || 0)} lines / ${Number(context.totalQuantity || 0).toLocaleString()} qty</span>
+              <span>${Number(context.lineCount || 0)} items / ${Number(context.totalQuantity || 0).toLocaleString()} qty</span>
               ${topLines ? `<small>${escapeHtml(topLines)}</small>` : ''}
               ${note}
             </div>

@@ -391,6 +391,7 @@ export class SqlServerOrderContextClient {
         AND ISNULL(l.ProdNo, '') <> ''
         AND (ISNULL(l.NoInvoAb, 0) + ISNULL(l.NoFin, 0)) > 0
         AND ISNULL(l.Un, 0) <> 0
+        AND (ISNULL(l.ExcPrint, 0) & 16384) = 0
       GROUP BY l.OrdNo;
 
       WITH RankedLines AS (
@@ -412,6 +413,7 @@ export class SqlServerOrderContextClient {
           AND ISNULL(l.ProdNo, '') <> ''
           AND (ISNULL(l.NoInvoAb, 0) + ISNULL(l.NoFin, 0)) > 0
           AND ISNULL(l.Un, 0) <> 0
+          AND (ISNULL(l.ExcPrint, 0) & 16384) = 0
       )
       SELECT OrdNo, LnNo, ProdNo, Descr, Quantity, Unit, Note
       FROM RankedLines

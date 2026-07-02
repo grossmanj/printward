@@ -68,6 +68,7 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /WHERE a\.SupNo = o\.SupNo/);
   assert.match(queries[1], /ISNULL\(distributor\.Nm, ''\) AS DistributorName/);
   assert.match(queries[1], /CASE WHEN ISNULL\(o\.SupNo, 0\) > 0 THEN 1 ELSE 0 END AS FreightRequired/);
+  assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 2);
 });
 
 test('SQL order context marks external distributors as freight-required', async () => {
