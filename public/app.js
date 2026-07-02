@@ -4,6 +4,7 @@ const state = {
   documentTypes: {},
   contextStatus: {},
   groupIndex: new Map(),
+  expandedGroups: new Set(),
   selected: new Set(),
   status: 'all',
   sort: localStorage.getItem('printward:sort') || 'dispatch',
@@ -36,6 +37,8 @@ const elements = {
   selectionLabel: document.querySelector('#selectionLabel'),
   printSelectedButton: document.querySelector('#printSelectedButton'),
   markPrintedButton: document.querySelector('#markPrintedButton'),
+  expandGroupsButton: document.querySelector('#expandGroupsButton'),
+  collapseGroupsButton: document.querySelector('#collapseGroupsButton'),
   ordersBody: document.querySelector('#ordersBody'),
   settingsPanel: document.querySelector('#settingsPanel'),
   settingsForm: document.querySelector('#settingsForm'),
@@ -297,6 +300,26 @@ function selectedOrderNumbers() {
   return Array.from(state.selected);
 }
 
+function resetExpandedGroups() {
+  state.expandedGroups.clear();
+}
+
+function expandAllGroups() {
+  state.expandedGroups = new Set(state.groupIndex.keys());
+  renderOrders();
+}
+
+function collapseAllGroups() {
+  state.expandedGroups.clear();
+  renderOrders();
+}
+
+function toggleGroupExpansion(groupId) {
+  if (state.expandedGroups.has(groupId)) state.expandedGroups.delete(groupId);
+  else state.expandedGroups.add(groupId);
+  renderOrders();
+}
+
 function pruneSelectionToVisibleOrders() {
   const visible = new Set(state.visibleOrders.map((order) => order.orderNumber));
   for (const orderNumber of state.selected) {
@@ -510,6 +533,7 @@ function renderGroupRow(group) {
   const readiness = groupReadiness(summary);
   const actionName = groupName();
   const selectedCount = group.orders.filter((order) => state.selected.has(order.orderNumber)).length;
+  const isExpanded = state.expandedGroups.has(group.id);
   const isBusy = Boolean(state.activePrint);
   const isActiveGroup = state.activePrint?.type === 'group' && state.activePrint.groupId === group.id;
   const blockedText = summary.blockedOrders > 0
@@ -528,9 +552,10 @@ function renderGroupRow(group) {
   const busyClass = isActiveGroup ? ' is-busy' : '';
 
   return `
-    <tr class="group-row group-status-${readiness.key}">
+    <tr class="group-row group-status-${readiness.key}${isExpanded ? ' is-expanded' : ''}" data-group-id="${escapeHtml(group.id)}" aria-expanded="${isExpanded ? 'true' : 'false'}">
       <td colspan="8">
         <div class="group-summary">
+          <div class="group-toggle" aria-hidden="true">${isExpanded ? 'v' : '>'}</div>
           <label class="group-picker">
             <input class="group-checkbox" type="checkbox" data-group-id="${group.id}" ${disabled}${disabledTitle}>
             <span>${state.group === 'dispatchSlot' ? 'Select combo' : 'Select group'}</span>
@@ -575,11 +600,17 @@ function renderSelection() {
   const count = state.selected.size;
   const isBusy = Boolean(state.activePrint);
   const isActiveBulk = state.activePrint?.type === 'selected';
+  const groupIds = Array.from(state.groupIndex.keys());
+  const hasGroups = state.group !== 'none' && groupIds.length > 0;
+  const allExpanded = hasGroups && groupIds.every((groupId) => state.expandedGroups.has(groupId));
+  const anyExpanded = hasGroups && groupIds.some((groupId) => state.expandedGroups.has(groupId));
   elements.selectionLabel.textContent = count === 0 ? 'No orders selected' : `${count} order${count === 1 ? '' : 's'} selected`;
   elements.printSelectedButton.disabled = count === 0 || isBusy;
   elements.printSelectedButton.textContent = isActiveBulk ? printStageText(state.activePrint.stage) : 'Print selected';
   elements.printSelectedButton.classList.toggle('is-busy', isActiveBulk);
   elements.markPrintedButton.disabled = count === 0 || isBusy;
+  elements.expandGroupsButton.disabled = !hasGroups || allExpanded;
+  elements.collapseGroupsButton.disabled = !hasGroups || !anyExpanded;
   elements.selectAll.disabled = isBusy;
   elements.selectAll.checked = state.visibleOrders.length > 0 && state.visibleOrders.every((order) => state.selected.has(order.orderNumber));
   elements.selectAll.indeterminate = count > 0 && !elements.selectAll.checked;
@@ -603,11 +634,16 @@ function renderOrders() {
   const rowsToRender = state.group === 'none'
     ? [{ orders: ordered }]
     : groups;
+  const validGroupIds = new Set(groups.map((group) => group.id));
+  for (const groupId of state.expandedGroups) {
+    if (!validGroupIds.has(groupId)) state.expandedGroups.delete(groupId);
+  }
 
   for (const group of rowsToRender) {
     if (state.group !== 'none') {
       state.groupIndex.set(group.id, group);
       rows.push(renderGroupRow(group));
+      if (!state.expandedGroups.has(group.id)) continue;
     }
 
     for (const order of group.orders) {
@@ -1022,6 +1058,7 @@ async function markPrinted(orderNumbers) {
 async function setDeliveryDate(value) {
   state.deliveryDate = value || todayIsoDate();
   state.selected.clear();
+  resetExpandedGroups();
   renderDateControls();
   await loadOrders();
 }
@@ -1033,13 +1070,17 @@ function bindEvents() {
   renderDateControls();
 
   elements.refreshButton.addEventListener('click', async () => {
+    resetExpandedGroups();
     await Promise.all([loadOrders({ refresh: true }), checkAgent()]);
     toast('Order list refreshed');
   });
 
   elements.searchInput.addEventListener('input', () => {
     window.clearTimeout(bindEvents.searchTimer);
-    bindEvents.searchTimer = window.setTimeout(loadOrders, 180);
+    bindEvents.searchTimer = window.setTimeout(() => {
+      resetExpandedGroups();
+      loadOrders();
+    }, 180);
   });
 
   elements.dispatchDateInput.addEventListener('change', async () => {
@@ -1057,6 +1098,7 @@ function bindEvents() {
   elements.sortInput.addEventListener('change', () => {
     state.sort = elements.sortInput.value;
     localStorage.setItem('printward:sort', state.sort);
+    resetExpandedGroups();
     renderOrders();
   });
 
@@ -1064,12 +1106,14 @@ function bindEvents() {
     state.distributor = elements.distributorInput.value;
     localStorage.setItem('printward:distributor', state.distributor);
     state.selected.clear();
+    resetExpandedGroups();
     renderOrders();
   });
 
   elements.groupInput.addEventListener('change', () => {
     state.group = elements.groupInput.value;
     localStorage.setItem('printward:group', state.group);
+    resetExpandedGroups();
     renderOrders();
   });
 
@@ -1079,9 +1123,13 @@ function bindEvents() {
       button.classList.add('active');
       state.status = button.dataset.status;
       state.selected.clear();
+      resetExpandedGroups();
       await loadOrders();
     });
   });
+
+  elements.expandGroupsButton.addEventListener('click', expandAllGroups);
+  elements.collapseGroupsButton.addEventListener('click', collapseAllGroups);
 
   elements.ordersBody.addEventListener('change', (event) => {
     if (event.target.matches('.group-checkbox')) {
@@ -1112,6 +1160,13 @@ function bindEvents() {
         type: 'group',
         groupId: group.id
       });
+      return;
+    }
+
+    const groupRow = event.target.closest('.group-row');
+    if (groupRow) {
+      if (event.target.closest('.group-picker, .group-print')) return;
+      toggleGroupExpansion(groupRow.dataset.groupId);
       return;
     }
 
