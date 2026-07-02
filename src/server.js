@@ -6,12 +6,12 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
+import { repeatPdfPages } from './pdf.js';
 import {
   DOCUMENT_ORDER,
   DOCUMENT_TYPES,
   applyDocumentRequirements,
   buildOrders,
-  expandPrintDocumentCopies,
   filterOrders,
   orderToPrintSnapshot,
   summarizeDispatchCombos,
@@ -293,14 +293,20 @@ function buildManifest(req, job) {
   const documentTokenParams = job.callbackToken
     ? `&jobId=${encodeURIComponent(job.id)}&token=${encodeURIComponent(job.callbackToken)}`
     : '';
+  const documentTransformParams = (document) => {
+    const pageCopies = normalizedPageCopies(document.pageCopies);
+    return pageCopies > 1 && document.type === 'freight'
+      ? `&copyMode=perPage&pageCopies=${encodeURIComponent(String(pageCopies))}`
+      : '';
+  };
   return {
     jobId: job.id,
     callbackUrl: `${origin}/api/print-jobs/${job.id}/complete${callbackToken}`,
     orders: job.orders.map((order) => ({
       ...order,
-      documents: expandPrintDocumentCopies(order.documents).map((document) => ({
+      documents: order.documents.map((document) => ({
         ...document,
-        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}`
+        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}${documentTransformParams(document)}`
       }))
     }))
   };
@@ -341,6 +347,12 @@ function normalizedDocumentTypesForConfig(documentTypes, config) {
 
   const normalized = requested.filter((type) => allowed.includes(type));
   return normalized.length > 0 ? normalized : allowed;
+}
+
+function normalizedPageCopies(value) {
+  const copies = Math.trunc(Number(value || 1));
+  if (!Number.isFinite(copies)) return 1;
+  return Math.min(20, Math.max(1, copies));
 }
 
 function defaultsForConfig(defaults, config) {
@@ -848,13 +860,17 @@ async function handleApi(req, res, requestUrl, context) {
     }
 
     const object = await storage.getObject(name, source);
+    const pageCopies = requestUrl.searchParams.get('copyMode') === 'perPage'
+      ? normalizedPageCopies(requestUrl.searchParams.get('pageCopies'))
+      : 1;
+    const body = pageCopies > 1 ? await repeatPdfPages(object.body, pageCopies) : object.body;
     res.writeHead(200, {
-      'content-type': object.contentType || 'application/pdf',
-      'content-length': object.body.length,
+      'content-type': pageCopies > 1 ? 'application/pdf' : (object.contentType || 'application/pdf'),
+      'content-length': body.length,
       'content-disposition': `inline; filename="${path.basename(name).replaceAll('"', '')}"`,
       'cache-control': 'private, max-age=30'
     });
-    res.end(object.body);
+    res.end(body);
     return;
   }
 

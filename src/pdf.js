@@ -47,3 +47,23 @@ export function createPlaceholderPdf(title, lines = []) {
 
   return Buffer.from(pdf, 'utf8');
 }
+
+export async function repeatPdfPages(body, copies) {
+  const normalizedCopies = Math.min(20, Math.max(1, Math.trunc(Number(copies || 1))));
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  if (normalizedCopies === 1) return sourceBody;
+
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(sourceBody);
+  const repeated = await PDFDocument.create();
+
+  for (const pageIndex of source.getPageIndices()) {
+    const copiedPages = await repeated.copyPages(
+      source,
+      Array.from({ length: normalizedCopies }, () => pageIndex)
+    );
+    for (const page of copiedPages) repeated.addPage(page);
+  }
+
+  return Buffer.from(await repeated.save());
+}

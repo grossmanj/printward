@@ -131,13 +131,7 @@ function normalizedDistributorName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function normalizedPrintCopies(value) {
-  const copies = Math.trunc(Number(value || 1));
-  if (!Number.isFinite(copies)) return 1;
-  return Math.min(20, Math.max(1, copies));
-}
-
-function freightPrintCopiesForOrder(order) {
+function freightPageCopiesForOrder(order) {
   return FREIGHT_PRINT_COPY_RULES.get(normalizedDistributorName(order.context?.distributorName)) || 1;
 }
 
@@ -361,7 +355,7 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
 
 export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
-  const freightPrintCopies = freightPrintCopiesForOrder(order);
+  const freightPageCopies = freightPageCopiesForOrder(order);
   return {
     orderNumber: order.orderNumber,
     missingTypes: order.missingTypes.filter((type) => selected.has(type)),
@@ -380,22 +374,7 @@ export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
         updated: document.updated,
         generation: document.generation,
         contentType: document.contentType,
-        printCopies: document.type === 'freight' && freightPrintCopies > 1 ? freightPrintCopies : undefined
+        pageCopies: document.type === 'freight' && freightPageCopies > 1 ? freightPageCopies : undefined
       }))
   };
-}
-
-export function expandPrintDocumentCopies(documents = []) {
-  return documents.flatMap((document) => {
-    const copies = normalizedPrintCopies(document.printCopies);
-    const { printCopies, ...baseDocument } = document;
-    if (copies === 1) return [baseDocument];
-
-    return Array.from({ length: copies }, (_, index) => ({
-      ...baseDocument,
-      typeLabel: `${baseDocument.typeLabel || baseDocument.type} copy ${index + 1}/${copies}`,
-      printCopyIndex: index + 1,
-      printCopyCount: copies
-    }));
-  });
 }
