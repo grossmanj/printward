@@ -221,6 +221,8 @@ test('filters orders by SQL context fields', () => {
       customerName: 'Nordward Fresh Market',
       distributorNo: 0,
       distributorName: '',
+      packerNo: 100,
+      packerName: 'Anna Packer',
       deliveryMethodName: 'Truck 12 Stockholm',
       deliveryDate: '2026-06-25',
       dispatchTime: '06:00',
@@ -243,6 +245,7 @@ test('filters orders by SQL context fields', () => {
   assert.equal(filterOrders(orders, { deliveryDate: '2026-06-27' }).length, 0);
   assert.equal(filterOrders(orders, { q: 'fresh market', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'truck 12', deliveryDate: '2026-06-25' }).length, 1);
+  assert.equal(filterOrders(orders, { q: 'anna packer', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'internal', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'external freight', deliveryDate: '2026-06-26' }).length, 1);
   assert.equal(filterOrders(orders, { q: '06:00', deliveryDate: '2026-06-25' }).length, 1);

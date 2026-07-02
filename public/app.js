@@ -582,6 +582,9 @@ function renderOrders() {
         .slice(0, 2)
         .join(', ');
       const packingText = packingLeftText(context);
+      const packerText = context.packerName
+        ? `Packer: ${context.packerName}${context.packerNo ? ` (#${context.packerNo})` : ''}`
+        : '';
       const note = context.orderNote ? `<small class="context-note">${escapeHtml(context.orderNote)}</small>` : '';
       const printBlocked = hasPackingLeft(order);
       const printBlockedTitle = printBlocked ? ` title="${escapeHtml(`Packing left: ${packingText}`)}" disabled` : '';
@@ -612,6 +615,7 @@ function renderOrders() {
             <div class="line-meta">
               <span>${Number(context.lineCount || 0)} items / ${Number(context.totalQuantity || 0).toLocaleString()} qty</span>
               ${packingText ? `<small class="packing-left">Packing left: ${escapeHtml(packingText)}</small>` : ''}
+              ${packerText ? `<small class="packer-contact">${escapeHtml(packerText)}</small>` : ''}
               ${topLines ? `<small>${escapeHtml(topLines)}</small>` : ''}
               ${note}
             </div>

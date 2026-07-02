@@ -33,6 +33,8 @@ test('attaches missing order context safely', () => {
   assert.deepEqual(orders[0].context.freightConsignmentNumbers, []);
   assert.equal(orders[0].context.deliveryMethodName, '');
   assert.equal(orders[0].context.dispatchTime, null);
+  assert.equal(orders[0].context.packerNo, 0);
+  assert.equal(orders[0].context.packerName, '');
   assert.deepEqual(orders[0].context.packingDepartments, []);
   assert.equal(orders[0].context.packingLinesLeft, 0);
   assert.equal(orders[0].context.packingQuantityLeft, 0);
@@ -65,12 +67,16 @@ test('SQL order context filters sales transaction headers', async () => {
   await client.getByDeliveryDate('2026-07-01');
   await client.fetchBatch([1956705]);
 
-  assert.match(queries[0], /WHERE o\.DelDt = @delDt\s+AND o\.TrTp = 1/);
-  assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1;/);
+  assert.match(queries[0], /WHERE o\.DelDt = @delDt\s+AND o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0/);
+  assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0;/);
   assert.match(queries[1], /ISNULL\(NULLIF\(o\.Nm, ''\), ISNULL\(customer\.Nm, ''\)\) AS CustomerName/);
   assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) AS SupNo/);
   assert.match(queries[1], /WHERE a\.SupNo = o\.SupNo/);
   assert.match(queries[1], /ISNULL\(distributor\.Nm, ''\) AS DistributorName/);
+  assert.match(queries[1], /ISNULL\(o\.Rsp, 0\) AS Rsp/);
+  assert.match(queries[1], /WHERE a\.EmpNo = o\.Rsp/);
+  assert.match(queries[1], /AND ISNULL\(o\.Rsp, 0\) > 0/);
+  assert.match(queries[1], /ISNULL\(packer\.Nm, ''\) AS PackerName/);
   assert.match(queries[1], /CASE WHEN ISNULL\(o\.SupNo, 0\) > 0 THEN 1 ELSE 0 END AS FreightRequired/);
   assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 3);
   assert.match(queries[1], /LinesLeftToPack AS/);
@@ -98,6 +104,8 @@ test('SQL order context marks external distributors as freight-required', async 
                 CustomerName: 'Customer AB',
                 SupNo: 789,
                 DistributorName: 'External Freight AB',
+                Rsp: 321,
+                PackerName: 'Warehouse Packer',
                 DelDt: 20260702,
                 DelPri: 12,
                 DelMt: 5,
@@ -122,6 +130,8 @@ test('SQL order context marks external distributors as freight-required', async 
 
   assert.equal(context.distributorNo, 789);
   assert.equal(context.distributorName, 'External Freight AB');
+  assert.equal(context.packerNo, 321);
+  assert.equal(context.packerName, 'Warehouse Packer');
   assert.equal(context.freightRequired, true);
   assert.equal(context.dispatchTime, '12:00');
   assert.equal(context.lineCount, 1);

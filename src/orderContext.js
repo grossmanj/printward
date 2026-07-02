@@ -117,6 +117,8 @@ function normalizeOrderContext(row, lines = [], packingDepartments = []) {
   const distributorNo = Number(row.distributorNo ?? row.SupNo ?? 0) || 0;
   const distributorName = String(row.distributorName ?? row.DistributorName ?? '').trim();
   const freightRequired = distributorNo > 0;
+  const packerNo = Number(row.packerNo ?? row.Rsp ?? 0) || 0;
+  const packerName = packerNo > 0 ? String(row.packerName ?? row.PackerName ?? '').trim() : '';
 
   return {
     available: true,
@@ -136,6 +138,8 @@ function normalizeOrderContext(row, lines = [], packingDepartments = []) {
     consignmentNo: String(row.consignmentNo ?? row.ConsNo ?? '').trim(),
     distributorNo,
     distributorName,
+    packerNo,
+    packerName,
     freightRequired,
     freightStatus: Number(row.freightStatus ?? row.FreightStatus ?? 0) || null,
     freightConsignmentNumbers,
@@ -313,6 +317,7 @@ export class SqlServerOrderContextClient {
       FROM Ord o
       WHERE o.DelDt = @delDt
         AND o.TrTp = 1
+        AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
       ORDER BY ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo;
     `;
 
@@ -362,6 +367,7 @@ export class SqlServerOrderContextClient {
         ISNULL(o.Nm, '') AS Nm,
         o.OrdBasNo,
         ISNULL(o.SupNo, 0) AS SupNo,
+        ISNULL(o.Rsp, 0) AS Rsp,
         o.DelMt,
         o.DelPri,
         ISNULL(deliveryMethod.Txt, '') AS DeliveryMethodName,
@@ -372,6 +378,7 @@ export class SqlServerOrderContextClient {
         ISNULL(o.Inf2, '') AS Inf2,
         ISNULL(NULLIF(o.Nm, ''), ISNULL(customer.Nm, '')) AS CustomerName,
         ISNULL(distributor.Nm, '') AS DistributorName,
+        ISNULL(packer.Nm, '') AS PackerName,
         CASE WHEN ISNULL(o.SupNo, 0) > 0 THEN 1 ELSE 0 END AS FreightRequired,
         ISNULL(freight.Val1, 0) AS FreightStatus,
         ISNULL(freight.Txt1, '') AS FreightConsignmentFresh,
@@ -395,6 +402,13 @@ export class SqlServerOrderContextClient {
         ORDER BY a.ActNo
       ) distributor
       OUTER APPLY (
+        SELECT TOP 1 a.Nm
+        FROM Actor a
+        WHERE a.EmpNo = o.Rsp
+          AND ISNULL(o.Rsp, 0) > 0
+        ORDER BY a.ActNo
+      ) packer
+      OUTER APPLY (
         SELECT TOP 1
           info.OrdNo,
           info.Val1,
@@ -410,7 +424,8 @@ export class SqlServerOrderContextClient {
           AND (ISNULL(info.Txt1, '') <> '' OR ISNULL(info.Txt2, '') <> '')
         ORDER BY info.OrdNo
       ) freight
-      WHERE o.TrTp = 1;
+      WHERE o.TrTp = 1
+        AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0;
 
       SELECT
         l.OrdNo,
@@ -579,6 +594,8 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       consignmentNo: '',
       distributorNo: 0,
       distributorName: '',
+      packerNo: 0,
+      packerName: '',
       freightRequired: false,
       freightStatus: null,
       freightConsignmentNumbers: [],

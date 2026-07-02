@@ -313,6 +313,8 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
         context.consignmentNo,
         context.distributorNo,
         context.distributorName,
+        context.packerNo,
+        context.packerName,
         Number(context.distributorNo || 0) > 0 ? 'external distributor' : 'internal',
         context.deliveryDate,
         context.deliveryMethod,

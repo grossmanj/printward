@@ -586,6 +586,11 @@ tr:last-child td {
   font-weight: 800;
 }
 
+.packer-contact {
+  color: var(--text) !important;
+  font-weight: 800;
+}
+
 .row-actions {
   display: flex;
   gap: 8px;
