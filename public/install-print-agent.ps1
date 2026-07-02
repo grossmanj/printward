@@ -27,6 +27,12 @@ function Download-File($Url, $Destination) {
   Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
 }
 
+function Assert-LastExitCode($Label) {
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Label failed with exit code $LASTEXITCODE."
+  }
+}
+
 function Show-AgentLog($Path) {
   Write-Host ""
   Write-Host "Agent log: $Path"
@@ -71,11 +77,15 @@ function Stop-AgentOnPort($LocalPort) {
 
 function Install-Node {
   $nodeExe = Join-Path $NodeDir "node.exe"
-  if (Test-Path $nodeExe) {
+  $npmCmd = Join-Path $NodeDir "npm.cmd"
+  if ((Test-Path $nodeExe) -and (Test-Path $npmCmd)) {
     return $nodeExe
   }
 
   Write-Step "Installing local Node.js runtime"
+  if (Test-Path $NodeDir) {
+    Remove-Item -Path $NodeDir -Recurse -Force
+  }
   New-Item -ItemType Directory -Force -Path $NodeDir | Out-Null
 
   $index = Invoke-WebRequest -Uri $NodeIndexUrl -UseBasicParsing
@@ -120,10 +130,25 @@ function Install-PrintwardApp($NpmCmd) {
 
   Write-Step "Installing production npm dependencies"
   Push-Location $AppDir
+  $oldPath = $env:Path
+  $oldPrependNodePath = $env:npm_config_scripts_prepend_node_path
   try {
-    & $NpmCmd install --omit=dev
+    $env:Path = "$NodeDir;$env:Path"
+    $env:npm_config_scripts_prepend_node_path = "true"
+    & $NpmCmd ci --omit=dev --no-audit --no-fund
+    Assert-LastExitCode "npm dependency install"
   } finally {
+    $env:Path = $oldPath
+    if ($null -eq $oldPrependNodePath) {
+      Remove-Item Env:\npm_config_scripts_prepend_node_path -ErrorAction SilentlyContinue
+    } else {
+      $env:npm_config_scripts_prepend_node_path = $oldPrependNodePath
+    }
     Pop-Location
+  }
+
+  if (-not (Test-Path (Join-Path $AppDir "node_modules\pdf-lib\package.json"))) {
+    throw "npm install completed, but pdf-lib was not installed."
   }
 }
 
@@ -172,11 +197,23 @@ exit /b %ERRORLEVEL%
   return $startCmd
 }
 
-function Register-StartupTask($StartCmd) {
-  Write-Step "Registering Printward Agent startup task"
-  $taskName = "PrintwardAgent"
-  $taskRun = "`"$StartCmd`""
-  & schtasks.exe /Create /TN $taskName /TR $taskRun /SC ONLOGON /F | Out-Null
+function Register-StartupLauncher($StartCmd) {
+  Write-Step "Registering Printward Agent startup"
+  $startupDir = [Environment]::GetFolderPath("Startup")
+  if (-not $startupDir) {
+    Write-Host "Windows Startup folder was not found; automatic startup was skipped."
+    return
+  }
+
+  New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
+  $launcher = Join-Path $startupDir "PrintwardAgent.vbs"
+  $escapedStartCmd = $StartCmd.Replace('"', '""')
+  $content = @"
+Set shell = CreateObject("WScript.Shell")
+shell.Run Chr(34) & "$escapedStartCmd" & Chr(34), 0, False
+"@
+  Set-Content -Path $launcher -Value $content -Encoding ASCII
+  Write-Host "Startup launcher: $launcher"
 }
 
 function Start-And-Verify($StartCmd) {
@@ -231,7 +268,7 @@ try {
   Install-PrintwardApp $npmCmd
   $sumatraExe = Install-Sumatra
   $startCmd = Write-StartScript $nodeExe $sumatraExe
-  Register-StartupTask $startCmd
+  Register-StartupLauncher $startCmd
   Start-And-Verify $startCmd
 } finally {
   Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
