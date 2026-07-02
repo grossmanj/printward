@@ -110,7 +110,7 @@ export async function fetchBookedFreightShipments(config) {
   const statuses = config.nshift.bookedStatuses.length > 0 ? config.nshift.bookedStatuses : [2, 8];
   const { fromDelDt, toDelDt } = dateWindow(config);
 
-  request.input('limit', sql.Int, config.nshift.syncLimit || 100);
+  request.input('limit', sql.Int, config.nshift.candidateLimit || config.nshift.syncLimit || 100);
   request.input('infCatNo', sql.Int, config.nshift.infCatNo);
   request.input('frInfTp', sql.Int, config.nshift.frInfTp);
   request.input('frInfTp2', sql.Int, config.nshift.frInfTp2);
@@ -187,6 +187,11 @@ function createOutputStorage(config) {
   }, 'freight');
 }
 
+async function getExistingObject(storage, objectName) {
+  if (typeof storage.getObjectMetadata !== 'function') return null;
+  return storage.getObjectMetadata(objectName);
+}
+
 export async function syncFreightDocuments(config, overrides = {}) {
   if (!config.nshift.outputBucket) {
     throw new Error('NSHIFT_OUTPUT_GCS_BUCKET, FREIGHT_GCS_BUCKET, or GCS_BUCKET is required for freight sync output.');
@@ -221,15 +226,39 @@ export async function syncFreightDocuments(config, overrides = {}) {
     throw new Error('Refusing to call production nShift without NSHIFT_ALLOWED_ORDER_NUMBERS, NSHIFT_ALLOWED_CONSIGNMENT_NUMBERS, or NSHIFT_ALLOW_ALL=true.');
   }
 
-  const nshift = overrides.nshiftClient || new NshiftConsignmentClient(config.nshift);
   const storage = overrides.storage || createOutputStorage(config);
+  let nshift = overrides.nshiftClient || null;
   const results = [];
+  const syncLimit = Math.max(1, Number(config.nshift.syncLimit || 100));
+  let nshiftCallCount = 0;
 
   for (const shipment of shipments) {
     const consignmentNumbers = shipment.consignments.map((item) => item.consignmentNo);
     const objectName = outputObjectName(config.nshift.outputPrefix, shipment.orderNumber);
 
     try {
+      if (!config.nshift.dryRun && !config.nshift.forceRefresh) {
+        const existing = await getExistingObject(storage, objectName);
+        if (existing) {
+          results.push({
+            ok: true,
+            orderNumber: shipment.orderNumber,
+            consignmentNumbers,
+            objectName,
+            uploaded: false,
+            skipped: true,
+            existing: true,
+            generation: existing.generation ? String(existing.generation) : null,
+            updated: existing.updated || null
+          });
+          continue;
+        }
+      }
+
+      if (nshiftCallCount >= syncLimit) break;
+      nshiftCallCount += 1;
+
+      if (!nshift) nshift = new NshiftConsignmentClient(config.nshift);
       const documents = await nshift.printDocuments(consignmentNumbers);
       const pdfs = documents
         .filter((document) => {
