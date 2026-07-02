@@ -11,6 +11,7 @@ import {
   DOCUMENT_TYPES,
   applyDocumentRequirements,
   buildOrders,
+  expandPrintDocumentCopies,
   filterOrders,
   orderToPrintSnapshot,
   summarizeDispatchCombos,
@@ -297,7 +298,7 @@ function buildManifest(req, job) {
     callbackUrl: `${origin}/api/print-jobs/${job.id}/complete${callbackToken}`,
     orders: job.orders.map((order) => ({
       ...order,
-      documents: order.documents.map((document) => ({
+      documents: expandPrintDocumentCopies(order.documents).map((document) => ({
         ...document,
         url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}`
       }))

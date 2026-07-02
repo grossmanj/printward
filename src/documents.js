@@ -26,6 +26,10 @@ export const DOCUMENT_ORDER = Object.values(DOCUMENT_TYPES)
   .sort((left, right) => left.order - right.order)
   .map((type) => type.key);
 
+const FREIGHT_PRINT_COPY_RULES = new Map([
+  ['db schenker finland international', 4]
+]);
+
 const MATCHERS = [
   ['packingSlip', /^order([0-9A-Za-z_-]+)\.pdf$/i],
   ['attachment', /^parti([0-9A-Za-z_-]+)\.pdf$/i],
@@ -121,6 +125,20 @@ function getPacketStatus(documents, missingTypes, requiredTypes = DOCUMENT_ORDER
 
 function normalizedDocumentTypes(types = DOCUMENT_ORDER) {
   return types.filter((type) => DOCUMENT_ORDER.includes(type));
+}
+
+function normalizedDistributorName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizedPrintCopies(value) {
+  const copies = Math.trunc(Number(value || 1));
+  if (!Number.isFinite(copies)) return 1;
+  return Math.min(20, Math.max(1, copies));
+}
+
+function freightPrintCopiesForOrder(order) {
+  return FREIGHT_PRINT_COPY_RULES.get(normalizedDistributorName(order.context?.distributorName)) || 1;
 }
 
 function requiredTypesForOrder(order, requiredTypes = DOCUMENT_ORDER) {
@@ -343,6 +361,7 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
 
 export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
+  const freightPrintCopies = freightPrintCopiesForOrder(order);
   return {
     orderNumber: order.orderNumber,
     missingTypes: order.missingTypes.filter((type) => selected.has(type)),
@@ -360,7 +379,23 @@ export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
         size: document.size,
         updated: document.updated,
         generation: document.generation,
-        contentType: document.contentType
+        contentType: document.contentType,
+        printCopies: document.type === 'freight' && freightPrintCopies > 1 ? freightPrintCopies : undefined
       }))
   };
+}
+
+export function expandPrintDocumentCopies(documents = []) {
+  return documents.flatMap((document) => {
+    const copies = normalizedPrintCopies(document.printCopies);
+    const { printCopies, ...baseDocument } = document;
+    if (copies === 1) return [baseDocument];
+
+    return Array.from({ length: copies }, (_, index) => ({
+      ...baseDocument,
+      typeLabel: `${baseDocument.typeLabel || baseDocument.type} copy ${index + 1}/${copies}`,
+      printCopyIndex: index + 1,
+      printCopyCount: copies
+    }));
+  });
 }

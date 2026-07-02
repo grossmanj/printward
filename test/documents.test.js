@@ -5,7 +5,9 @@ import {
   applyDocumentRequirements,
   buildOrders,
   classifyObject,
+  expandPrintDocumentCopies,
   filterOrders,
+  orderToPrintSnapshot,
   summarizeDispatchCombos,
   summarizeOrders
 } from '../src/documents.js';
@@ -252,4 +254,37 @@ test('filters orders by SQL context fields', () => {
   assert.equal(filterOrders(orders, { q: 'salmon', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'fresh market', deliveryDate: '2026-06-26' }).length, 0);
   assert.equal(filterOrders(orders, { q: 'not-found' }).length, 0);
+});
+
+test('prints four freight copies for DB Schenker Finland International', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
+    { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' },
+    { name: 'freight1001.pdf', updated: '2026-06-24T08:02:00.000Z', generation: '3' }
+  ]), new Map([
+    ['1001', {
+      distributorNo: 123,
+      distributorName: 'DB Schenker Finland International',
+      freightRequired: true
+    }]
+  ]));
+
+  const snapshot = orderToPrintSnapshot(orders[0], ['packingSlip', 'attachment', 'freight']);
+  const freight = snapshot.documents.find((document) => document.type === 'freight');
+
+  assert.equal(freight.printCopies, 4);
+
+  const expanded = expandPrintDocumentCopies(snapshot.documents);
+  assert.equal(expanded.filter((document) => document.type === 'packingSlip').length, 1);
+  assert.equal(expanded.filter((document) => document.type === 'attachment').length, 1);
+  assert.equal(expanded.filter((document) => document.type === 'freight').length, 4);
+  assert.deepEqual(
+    expanded.filter((document) => document.type === 'freight').map((document) => document.typeLabel),
+    [
+      'Freight document copy 1/4',
+      'Freight document copy 2/4',
+      'Freight document copy 3/4',
+      'Freight document copy 4/4'
+    ]
+  );
 });
