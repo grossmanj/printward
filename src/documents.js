@@ -94,12 +94,24 @@ function getDocumentPrintStatus(document, printIndex) {
   return printEventMatchesDocument(event, document) ? 'printed' : 'reprint';
 }
 
-function getPacketStatus(documents, missingTypes, requiredTypes = DOCUMENT_ORDER) {
+function hasPackingLeft(order) {
+  const context = order.context || {};
+  if (context.packingBlocked) return true;
+  if (Number(context.packingLinesLeft || 0) > 0) return true;
+  return (context.packingDepartments || []).some((department) => Number(department.linesLeft || 0) > 0);
+}
+
+function isOrderReady(order) {
+  return order.missingTypes.length === 0 && !hasPackingLeft(order);
+}
+
+function getPacketStatus(documents, missingTypes, requiredTypes = DOCUMENT_ORDER, packingBlocked = false) {
   const existing = DOCUMENT_ORDER.map((type) => documents[type]).filter(Boolean);
   const statuses = existing
     .filter((document) => requiredTypes.includes(document.type))
     .map((document) => document.printStatus);
 
+  if (packingBlocked) return 'blocked';
   if (missingTypes.length > 0) return 'missing';
   if (statuses.length === 0) return 'missing';
   if (statuses.every((status) => status === 'printed')) return 'printed';
@@ -122,12 +134,14 @@ export function applyDocumentRequirements(orders, requiredTypes = DOCUMENT_ORDER
   return orders.map((order) => {
     const orderRequiredTypes = requiredTypesForOrder(order, requiredTypes);
     const missingTypes = orderRequiredTypes.filter((type) => !order.documents[type]);
+    const packingBlocked = hasPackingLeft(order);
 
     return {
       ...order,
       requiredTypes: orderRequiredTypes,
       missingTypes,
-      packetStatus: getPacketStatus(order.documents, missingTypes, orderRequiredTypes)
+      packingBlocked,
+      packetStatus: getPacketStatus(order.documents, missingTypes, orderRequiredTypes, packingBlocked)
     };
   });
 }
@@ -206,6 +220,7 @@ export function summarizeOrders(orders, options = {}) {
     totalOrders: orders.length,
     readyOrders: 0,
     missingOrders: 0,
+    blockedOrders: 0,
     pendingOrders: 0,
     printedOrders: 0,
     reprintOrders: 0,
@@ -213,8 +228,10 @@ export function summarizeOrders(orders, options = {}) {
   };
 
   for (const order of orders) {
-    if (order.missingTypes.length === 0) summary.readyOrders += 1;
-    if (order.packetStatus === 'missing') summary.missingOrders += 1;
+    const packingBlocked = hasPackingLeft(order);
+    if (isOrderReady(order)) summary.readyOrders += 1;
+    if (order.missingTypes.length > 0) summary.missingOrders += 1;
+    if (packingBlocked) summary.blockedOrders = (summary.blockedOrders || 0) + 1;
     if (order.packetStatus === 'pending') summary.pendingOrders += 1;
     if (order.packetStatus === 'printed') summary.printedOrders += 1;
     if (order.packetStatus === 'reprint') summary.reprintOrders += 1;
@@ -247,6 +264,7 @@ export function summarizeDispatchCombos(orders) {
         totalOrders: 0,
         readyOrders: 0,
         missingOrders: 0,
+        blockedOrders: 0,
         pendingOrders: 0,
         reprintOrders: 0,
         printedOrders: 0
@@ -255,8 +273,10 @@ export function summarizeDispatchCombos(orders) {
 
     const combo = combos.get(key);
     combo.totalOrders += 1;
-    if (order.missingTypes.length === 0) combo.readyOrders += 1;
-    if (order.packetStatus === 'missing') combo.missingOrders += 1;
+    const packingBlocked = hasPackingLeft(order);
+    if (isOrderReady(order)) combo.readyOrders += 1;
+    if (order.missingTypes.length > 0) combo.missingOrders += 1;
+    if (packingBlocked) combo.blockedOrders = (combo.blockedOrders || 0) + 1;
     if (order.packetStatus === 'pending') combo.pendingOrders += 1;
     if (order.packetStatus === 'reprint') combo.reprintOrders += 1;
     if (order.packetStatus === 'printed') combo.printedOrders += 1;
@@ -265,9 +285,9 @@ export function summarizeDispatchCombos(orders) {
   const values = Array.from(combos.values());
   return {
     totalCombos: values.length,
-    readyCombos: values.filter((combo) => combo.missingOrders === 0).length,
-    blockedCombos: values.filter((combo) => combo.missingOrders > 0).length,
-    needsPrintCombos: values.filter((combo) => combo.missingOrders === 0 && (combo.pendingOrders > 0 || combo.reprintOrders > 0)).length,
+    readyCombos: values.filter((combo) => combo.missingOrders === 0 && !combo.blockedOrders).length,
+    blockedCombos: values.filter((combo) => combo.missingOrders > 0 || combo.blockedOrders > 0).length,
+    needsPrintCombos: values.filter((combo) => combo.missingOrders === 0 && !combo.blockedOrders && (combo.pendingOrders > 0 || combo.reprintOrders > 0)).length,
     printedCombos: values.filter((combo) => combo.totalOrders > 0 && combo.printedOrders === combo.totalOrders).length
   };
 }
@@ -299,6 +319,8 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
         context.deliveryMethodName,
         context.dispatchPriority,
         context.dispatchTime,
+        context.packingBlocked ? 'packing left warehouse blocked' : '',
+        ...(context.packingDepartments || []).flatMap((department) => [department.department, department.linesLeft, department.quantityLeft]),
         ...(context.topLines || []).flatMap((line) => [line.productNo, line.description, line.note])
       ].filter(Boolean).join(' ').toLowerCase();
 
@@ -306,8 +328,9 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
     }
 
     if (status === 'all') return true;
-    if (status === 'ready') return order.missingTypes.length === 0;
-    if (status === 'missing') return order.packetStatus === 'missing';
+    if (status === 'ready') return isOrderReady(order);
+    if (status === 'missing') return order.missingTypes.length > 0;
+    if (status === 'blocked') return hasPackingLeft(order);
     if (status === 'pending') return order.packetStatus === 'pending';
     if (status === 'printed') return order.packetStatus === 'printed';
     if (status === 'reprint') return order.packetStatus === 'reprint';

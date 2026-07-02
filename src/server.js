@@ -730,6 +730,21 @@ async function handleApi(req, res, requestUrl, context) {
 
     const { orders } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { orderNumbers });
     const byOrderNumber = new Map(orders.map((order) => [order.orderNumber, order]));
+    const packingBlockedOrders = orderNumbers
+      .map((orderNumber) => byOrderNumber.get(orderNumber))
+      .filter((order) => order && (order.packingBlocked || order.context?.packingBlocked || Number(order.context?.packingLinesLeft || 0) > 0));
+
+    if (packingBlockedOrders.length > 0) {
+      sendJson(res, 409, {
+        error: 'One or more selected orders still have warehouse packing left.',
+        blockedOrders: packingBlockedOrders.map((order) => ({
+          orderNumber: order.orderNumber,
+          packingDepartments: order.context?.packingDepartments || []
+        }))
+      });
+      return;
+    }
+
     const snapshots = orderNumbers
       .map((orderNumber) => byOrderNumber.get(orderNumber))
       .filter(Boolean)

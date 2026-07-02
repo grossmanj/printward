@@ -73,15 +73,42 @@ function normalizeLine(line) {
   };
 }
 
+function packingDepartmentLabel(row) {
+  const bit = Number(row.departmentBit ?? row.DepartmentBit ?? 0);
+  if (bit === 1) return 'Dry';
+  if (bit === 2) return 'Frozen';
+  if (bit === 4) return 'Fresh/Other';
+
+  const department = String(row.department ?? row.Department ?? '').trim();
+  if (department.toLowerCase() === 'other') return 'Fresh/Other';
+  return department || 'Fresh/Other';
+}
+
+function normalizePackingDepartment(row) {
+  const departmentBit = Number(row.departmentBit ?? row.DepartmentBit ?? 4) || 4;
+  return {
+    department: packingDepartmentLabel(row),
+    departmentBit,
+    linesLeft: Number(row.linesLeft ?? row.LinesLeftToPack ?? 0) || 0,
+    quantityLeft: Number(row.quantityLeft ?? row.QuantityLeftToPack ?? 0) || 0
+  };
+}
+
 function uniqueNonEmpty(values) {
   return Array.from(new Set(
     values.map((value) => String(value || '').trim()).filter(Boolean)
   ));
 }
 
-function normalizeOrderContext(row, lines = []) {
+function normalizeOrderContext(row, lines = [], packingDepartments = []) {
   const orderNumber = normalizeOrderNumber(row.orderNumber ?? row.OrdNo);
   const topLines = lines.map(normalizeLine).filter((line) => line.productNo || line.description);
+  const normalizedPackingDepartments = (packingDepartments.length > 0 ? packingDepartments : row.packingDepartments || row.PackingDepartments || [])
+    .map(normalizePackingDepartment)
+    .filter((department) => department.linesLeft > 0 || department.quantityLeft !== 0)
+    .sort((left, right) => left.departmentBit - right.departmentBit);
+  const packingLinesLeft = normalizedPackingDepartments.reduce((sum, department) => sum + department.linesLeft, 0);
+  const packingQuantityLeft = normalizedPackingDepartments.reduce((sum, department) => sum + department.quantityLeft, 0);
   const totalQuantity = Number(row.totalQuantity ?? topLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0));
   const freightConsignmentNumbers = uniqueNonEmpty([
     row.freightConsignmentFresh ?? row.FreightConsignmentFresh,
@@ -121,7 +148,11 @@ function normalizeOrderContext(row, lines = []) {
     isActive: typeof row.isActive === 'boolean' ? row.isActive : isActiveOrder(row),
     lineCount: Number(row.lineCount ?? topLines.length) || 0,
     totalQuantity,
-    topLines
+    topLines,
+    packingDepartments: normalizedPackingDepartments,
+    packingLinesLeft,
+    packingQuantityLeft,
+    packingBlocked: packingLinesLeft > 0
   };
 }
 
@@ -419,12 +450,46 @@ export class SqlServerOrderContextClient {
       FROM RankedLines
       WHERE rn <= 3
       ORDER BY OrdNo, LnNo;
+
+      WITH LinesLeftToPack AS (
+        SELECT
+          l.OrdNo,
+          l.NoInvoAb,
+          Department =
+            CASE
+              WHEN p.Gr7 = 2 THEN 'Dry'
+              WHEN p.Gr7 = 5 THEN 'Frozen'
+              ELSE 'Fresh/Other'
+            END,
+          DepartmentBit =
+            CASE
+              WHEN p.Gr7 = 2 THEN 1
+              WHEN p.Gr7 = 5 THEN 2
+              ELSE 4
+            END
+        FROM OrdLn l
+        INNER JOIN @OrderNos f ON f.OrdNo = l.OrdNo
+        LEFT JOIN Prod p ON p.ProdNo = l.ProdNo
+        WHERE l.TrTp = 1
+          AND ISNULL(l.NoInvoAb, 0) <> 0
+          AND (ISNULL(l.ExcPrint, 0) & 16384) = 0
+      )
+      SELECT
+        OrdNo,
+        Department,
+        DepartmentBit,
+        LinesLeftToPack = COUNT(*),
+        QuantityLeftToPack = CAST(ROUND(SUM(ISNULL(NoInvoAb, 0)), 2) AS DECIMAL(18, 2))
+      FROM LinesLeftToPack
+      GROUP BY OrdNo, Department, DepartmentBit
+      ORDER BY OrdNo, DepartmentBit;
     `;
 
     const response = await request.query(query);
     const orderRows = response.recordsets?.[0] || [];
     const summaryRows = response.recordsets?.[1] || [];
     const lineRows = response.recordsets?.[2] || [];
+    const packingRows = response.recordsets?.[3] || [];
 
     const summaries = new Map(summaryRows.map((row) => [String(row.OrdNo), row]));
     const linesByOrder = new Map();
@@ -441,6 +506,18 @@ export class SqlServerOrderContextClient {
       });
     }
 
+    const packingByOrder = new Map();
+    for (const row of packingRows) {
+      const key = String(row.OrdNo);
+      if (!packingByOrder.has(key)) packingByOrder.set(key, []);
+      packingByOrder.get(key).push({
+        department: row.Department,
+        departmentBit: row.DepartmentBit,
+        linesLeft: Number(row.LinesLeftToPack || 0),
+        quantityLeft: Number(row.QuantityLeftToPack || 0)
+      });
+    }
+
     const result = new Map();
     for (const row of orderRows) {
       const key = String(row.OrdNo);
@@ -450,7 +527,7 @@ export class SqlServerOrderContextClient {
         lineCount: Number(summary.LineCount || 0),
         totalQuantity: Number(summary.TotalQuantity || 0),
         source: 'sqlserver'
-      }, linesByOrder.get(key) || []);
+      }, linesByOrder.get(key) || [], packingByOrder.get(key) || []);
       result.set(key, context);
     }
 
@@ -514,7 +591,11 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       isActive: null,
       lineCount: 0,
       totalQuantity: 0,
-      topLines: []
+      topLines: [],
+      packingDepartments: [],
+      packingLinesLeft: 0,
+      packingQuantityLeft: 0,
+      packingBlocked: false
     }
   }));
 }

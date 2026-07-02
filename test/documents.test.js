@@ -167,6 +167,46 @@ test('requires visible freight documents even without freight context', () => {
   assert.equal(required[0].packetStatus, 'pending');
 });
 
+test('blocks document printing while warehouse packing is left', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
+    { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' }
+  ], undefined, {
+    requiredTypes: ['packingSlip', 'attachment']
+  }), new Map([
+    ['1001', {
+      deliveryDate: '2026-06-25',
+      deliveryMethodName: 'Truck 12 Stockholm',
+      dispatchTime: '06:00',
+      packingBlocked: true,
+      packingLinesLeft: 3,
+      packingQuantityLeft: 12,
+      packingDepartments: [
+        { department: 'Dry', departmentBit: 1, linesLeft: 1, quantityLeft: 2 },
+        { department: 'Frozen', departmentBit: 2, linesLeft: 2, quantityLeft: 10 }
+      ]
+    }]
+  ]));
+
+  const required = applyDocumentRequirements(orders, ['packingSlip', 'attachment']);
+
+  assert.deepEqual(required[0].missingTypes, []);
+  assert.equal(required[0].packingBlocked, true);
+  assert.equal(required[0].packetStatus, 'blocked');
+  assert.equal(filterOrders(required, { status: 'ready' }).length, 0);
+  assert.equal(filterOrders(required, { status: 'blocked' }).length, 1);
+  assert.equal(filterOrders(required, { q: 'frozen' }).length, 1);
+  assert.equal(summarizeOrders(required).readyOrders, 0);
+  assert.equal(summarizeOrders(required).blockedOrders, 1);
+  assert.deepEqual(summarizeDispatchCombos(required), {
+    totalCombos: 1,
+    readyCombos: 0,
+    blockedCombos: 1,
+    needsPrintCombos: 0,
+    printedCombos: 0
+  });
+});
+
 test('filters orders by SQL context fields', () => {
   const orders = attachOrderContexts(buildOrders([
     { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },

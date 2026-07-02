@@ -168,7 +168,8 @@ function statusLabel(status) {
     printed: 'Printed',
     pending: 'Needs print',
     reprint: 'Updated',
-    missing: 'Missing'
+    missing: 'Missing',
+    blocked: 'Packing left'
   }[status] || status;
 }
 
@@ -177,8 +178,29 @@ function packetLabel(status) {
     printed: 'Printed',
     pending: 'Needs print',
     reprint: 'Updated docs',
-    missing: 'Missing docs'
+    missing: 'Missing docs',
+    blocked: 'Packing left'
   }[status] || status;
+}
+
+function hasPackingLeft(order = {}) {
+  const context = order.context || {};
+  return Boolean(order.packingBlocked || context.packingBlocked || Number(context.packingLinesLeft || 0) > 0);
+}
+
+function packingLeftText(context = {}) {
+  const departments = (context.packingDepartments || [])
+    .filter((department) => Number(department.linesLeft || 0) > 0 || Number(department.quantityLeft || 0) !== 0)
+    .sort((left, right) => Number(left.departmentBit || 0) - Number(right.departmentBit || 0));
+
+  if (departments.length === 0) return '';
+
+  return departments.map((department) => {
+    const items = Number(department.linesLeft || 0);
+    const quantity = Number(department.quantityLeft || 0);
+    const quantityText = quantity ? ` / ${quantity.toLocaleString()} qty` : '';
+    return `${department.department}: ${items} item${items === 1 ? '' : 's'}${quantityText}`;
+  }).join(', ');
 }
 
 function documentChip(order, type, document) {
@@ -187,14 +209,17 @@ function documentChip(order, type, document) {
     return `<span class="chip status-missing">${type.shortLabel}: Missing</span>`;
   }
 
+  const printStatus = hasPackingLeft(order) && ['packingSlip', 'attachment'].includes(type.key)
+    ? 'blocked'
+    : document.printStatus;
   const params = new URLSearchParams({
     name: document.name,
     source: document.source || 'primary'
   });
   const href = `/api/documents?${params}`;
   return [
-    `<span class="chip status-${document.printStatus}">`,
-    `<a href="${href}" target="_blank" rel="noreferrer">${type.shortLabel}: ${statusLabel(document.printStatus)}</a>`,
+    `<span class="chip status-${printStatus}">`,
+    `<a href="${href}" target="_blank" rel="noreferrer">${type.shortLabel}: ${statusLabel(printStatus)}</a>`,
     '</span>'
   ].join('');
 }
@@ -337,6 +362,7 @@ function summarizeGroup(orders) {
     total: orders.length,
     readyOrders: 0,
     missingOrders: 0,
+    blockedOrders: 0,
     pendingOrders: 0,
     reprintOrders: 0,
     printedOrders: 0,
@@ -347,8 +373,10 @@ function summarizeGroup(orders) {
   };
 
   for (const order of orders) {
-    if (order.missingTypes.length === 0) summary.readyOrders += 1;
-    if (order.packetStatus === 'missing') summary.missingOrders += 1;
+    const packingBlocked = hasPackingLeft(order);
+    if (order.missingTypes.length === 0 && !packingBlocked) summary.readyOrders += 1;
+    if (order.missingTypes.length > 0) summary.missingOrders += 1;
+    if (packingBlocked) summary.blockedOrders += 1;
     if (order.packetStatus === 'pending') summary.pendingOrders += 1;
     if (order.packetStatus === 'reprint') summary.reprintOrders += 1;
     if (order.packetStatus === 'printed') summary.printedOrders += 1;
@@ -364,11 +392,19 @@ function summarizeGroup(orders) {
     }
   }
 
-  summary.canPrint = summary.total > 0 && summary.missingOrders === 0;
+  summary.canPrint = summary.total > 0 && summary.missingOrders === 0 && summary.blockedOrders === 0;
   return summary;
 }
 
 function groupReadiness(summary) {
+  if (summary.blockedOrders > 0) {
+    return {
+      key: 'blocked',
+      label: 'Packing left',
+      detail: `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} not packed`
+    };
+  }
+
   if (summary.missingOrders > 0) {
     return {
       key: 'missing',
@@ -439,12 +475,16 @@ function renderGroupRow(group) {
   const readiness = groupReadiness(summary);
   const actionName = groupName();
   const selectedCount = group.orders.filter((order) => state.selected.has(order.orderNumber)).length;
+  const blockedText = summary.blockedOrders > 0
+    ? `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} still have warehouse packing left`
+    : '';
   const missingText = summary.missingLabels.size > 0
     ? `Missing ${Array.from(summary.missingLabels).slice(0, 3).join(', ')}`
     : 'No missing documents';
+  const disabledText = [blockedText, summary.missingOrders > 0 ? missingText : ''].filter(Boolean).join('. ');
   const printLabel = summary.printedOrders === summary.total ? `Reprint ${actionName}` : `Print ${actionName}`;
   const disabled = summary.canPrint ? '' : 'disabled';
-  const disabledTitle = summary.canPrint ? '' : ` title="${escapeHtml(missingText)}"`;
+  const disabledTitle = summary.canPrint ? '' : ` title="${escapeHtml(disabledText)}"`;
 
   return `
     <tr class="group-row group-status-${readiness.key}">
@@ -462,6 +502,7 @@ function renderGroupRow(group) {
           <div class="group-metrics" aria-label="Group readiness">
             <span>${summary.total} order${summary.total === 1 ? '' : 's'}</span>
             <span>${summary.readyOrders}/${summary.total} ready</span>
+            ${summary.blockedOrders > 0 ? `<span>${summary.blockedOrders} packing left</span>` : ''}
             <span>${
               summary.missingDocuments > 0
                 ? `${summary.missingDocuments} doc${summary.missingDocuments === 1 ? '' : 's'} missing`
@@ -540,7 +581,10 @@ function renderOrders() {
         .filter(Boolean)
         .slice(0, 2)
         .join(', ');
+      const packingText = packingLeftText(context);
       const note = context.orderNote ? `<small class="context-note">${escapeHtml(context.orderNote)}</small>` : '';
+      const printBlocked = hasPackingLeft(order);
+      const printBlockedTitle = printBlocked ? ` title="${escapeHtml(`Packing left: ${packingText}`)}" disabled` : '';
 
       rows.push(`
         <tr>
@@ -567,6 +611,7 @@ function renderOrders() {
           <td>
             <div class="line-meta">
               <span>${Number(context.lineCount || 0)} items / ${Number(context.totalQuantity || 0).toLocaleString()} qty</span>
+              ${packingText ? `<small class="packing-left">Packing left: ${escapeHtml(packingText)}</small>` : ''}
               ${topLines ? `<small>${escapeHtml(topLines)}</small>` : ''}
               ${note}
             </div>
@@ -576,7 +621,7 @@ function renderOrders() {
           <td><span class="packet-status status-${order.packetStatus}">${packetLabel(order.packetStatus)}</span></td>
           <td>
             <div class="row-actions">
-              <button class="button secondary row-print" type="button" data-order="${order.orderNumber}">Print</button>
+              <button class="button secondary row-print" type="button" data-order="${order.orderNumber}"${printBlockedTitle}>Print</button>
             </div>
           </td>
         </tr>
@@ -760,6 +805,15 @@ async function createPrintJob(orderNumbers) {
 
 function confirmIncompletePackets(orderNumbers) {
   const selected = new Set(orderNumbers);
+  const blocked = state.orders.filter((order) => selected.has(order.orderNumber) && hasPackingLeft(order));
+  if (blocked.length > 0) {
+    const details = blocked.slice(0, 4)
+      .map((order) => `${order.orderNumber}: ${packingLeftText(order.context) || 'packing left'}`)
+      .join('\n');
+    window.alert(`${blocked.length} selected order packet(s) still have warehouse packing left and cannot be printed yet.\n\n${details}`);
+    return false;
+  }
+
   const incomplete = state.orders.filter((order) => selected.has(order.orderNumber) && order.missingTypes.length > 0);
   if (incomplete.length === 0) return true;
 

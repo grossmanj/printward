@@ -448,6 +448,11 @@ tr:last-child td {
   background: #fff0ee;
 }
 
+.group-status-blocked .group-summary {
+  border-left-color: #a15c00;
+  background: #fff7e8;
+}
+
 .group-picker {
   display: inline-flex;
   align-items: center;
@@ -568,6 +573,17 @@ tr:last-child td {
   background: rgba(180, 35, 24, 0.08);
   border-color: rgba(180, 35, 24, 0.22);
   color: var(--danger);
+}
+
+.status-blocked {
+  background: #fff7e8;
+  border-color: #e4b45f;
+  color: #855000;
+}
+
+.packing-left {
+  color: #855000 !important;
+  font-weight: 800;
 }
 
 .row-actions {

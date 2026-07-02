@@ -33,6 +33,10 @@ test('attaches missing order context safely', () => {
   assert.deepEqual(orders[0].context.freightConsignmentNumbers, []);
   assert.equal(orders[0].context.deliveryMethodName, '');
   assert.equal(orders[0].context.dispatchTime, null);
+  assert.deepEqual(orders[0].context.packingDepartments, []);
+  assert.equal(orders[0].context.packingLinesLeft, 0);
+  assert.equal(orders[0].context.packingQuantityLeft, 0);
+  assert.equal(orders[0].context.packingBlocked, false);
 });
 
 test('SQL order context filters sales transaction headers', async () => {
@@ -68,7 +72,9 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /WHERE a\.SupNo = o\.SupNo/);
   assert.match(queries[1], /ISNULL\(distributor\.Nm, ''\) AS DistributorName/);
   assert.match(queries[1], /CASE WHEN ISNULL\(o\.SupNo, 0\) > 0 THEN 1 ELSE 0 END AS FreightRequired/);
-  assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 2);
+  assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 3);
+  assert.match(queries[1], /LinesLeftToPack AS/);
+  assert.match(queries[1], /QuantityLeftToPack = CAST\(ROUND\(SUM\(ISNULL\(NoInvoAb, 0\)\), 2\) AS DECIMAL\(18, 2\)\)/);
 });
 
 test('SQL order context marks external distributors as freight-required', async () => {
@@ -102,7 +108,8 @@ test('SQL order context marks external distributors as freight-required', async 
                 FreightConsignmentFresh: 'ABC'
               }],
               [{ OrdNo: 123, LineCount: 1, TotalQuantity: 4 }],
-              [{ OrdNo: 123, LnNo: 1, ProdNo: 'P1', Descr: 'Product', Quantity: 4, Unit: 'kg', Note: '' }]
+              [{ OrdNo: 123, LnNo: 1, ProdNo: 'P1', Descr: 'Product', Quantity: 4, Unit: 'kg', Note: '' }],
+              [{ OrdNo: 123, Department: 'Frozen', DepartmentBit: 2, LinesLeftToPack: 2, QuantityLeftToPack: 6 }]
             ]
           };
         }
@@ -118,4 +125,13 @@ test('SQL order context marks external distributors as freight-required', async 
   assert.equal(context.freightRequired, true);
   assert.equal(context.dispatchTime, '12:00');
   assert.equal(context.lineCount, 1);
+  assert.equal(context.packingBlocked, true);
+  assert.equal(context.packingLinesLeft, 2);
+  assert.equal(context.packingQuantityLeft, 6);
+  assert.deepEqual(context.packingDepartments, [{
+    department: 'Frozen',
+    departmentBit: 2,
+    linesLeft: 2,
+    quantityLeft: 6
+  }]);
 });
