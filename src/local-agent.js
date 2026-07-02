@@ -199,6 +199,7 @@ function sumatraPrintSettings(options) {
   const settings = [];
   const copies = Math.max(1, Number(options.copies || 1));
   if (copies > 1) settings.push(`${copies}x`);
+  if (options.staple === true) settings.push('collate');
   if (options.duplex === true) settings.push('duplex');
   if (options.duplex === false) settings.push('simplex');
   if (options.colorMode === 'grayscale') settings.push('monochrome');

@@ -47,6 +47,9 @@ const elements = {
   colorModeInput: document.querySelector('#colorModeInput'),
   duplexInput: document.querySelector('#duplexInput'),
   stapleInput: document.querySelector('#stapleInput'),
+  stapleInputLabel: document.querySelector('#stapleInputLabel'),
+  stapleOptionField: document.querySelector('#stapleOptionField'),
+  stapleOptionLabel: document.querySelector('#stapleOptionLabel'),
   stapleOptionInput: document.querySelector('#stapleOptionInput'),
   installAgentButton: document.querySelector('#installAgentButton'),
   testAgentButton: document.querySelector('#testAgentButton'),
@@ -738,6 +741,30 @@ function renderAgentStatus() {
     : state.agentCanPrint
       ? 'Agent online'
       : 'Agent setup needed';
+  renderFinishingControls();
+}
+
+function isWindowsClient() {
+  return state.agentDetails?.platform === 'win32'
+    || /^Win/i.test(window.navigator.platform || '')
+    || /Windows/i.test(window.navigator.userAgent || '');
+}
+
+function renderFinishingControls() {
+  const isWindows = isWindowsClient();
+  elements.stapleInputLabel.textContent = isWindows
+    ? 'Use printer driver stapling preset'
+    : 'Staple each order packet';
+  elements.stapleOptionLabel.textContent = isWindows
+    ? 'Windows print settings'
+    : 'CUPS staple option';
+  elements.stapleOptionInput.placeholder = isWindows
+    ? 'Driver default'
+    : 'StapleLocation=UpperLeft';
+  elements.stapleOptionInput.disabled = isWindows;
+  elements.stapleOptionField.title = isWindows
+    ? 'Windows stapling is controlled by the selected printer queue preferences.'
+    : '';
 }
 
 async function loadPrinters() {

@@ -293,7 +293,7 @@ StapleLocation=UpperLeft
 
 Printer finishing options vary by driver. Change the staple option in Settings to match the local printer's CUPS option.
 
-On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each order packet into one PDF before printing, so printer-driver defaults such as stapling have the best chance of applying per order packet. Advanced finishing options still depend on the installed Windows printer driver.
+On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each order packet into one PDF before printing and sends one print job per order. SumatraPDF can set common options such as copies, collation, duplex, color mode, tray, and paper size, but stapling is controlled by the Windows printer driver. For stapling, create or select a Windows printer queue whose driver preferences already enable the wanted finisher/staple mode, for example an `MP C4504 Staple` queue.
 
 ## API
 
