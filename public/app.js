@@ -16,6 +16,7 @@ const state = {
   agentOnline: false,
   agentCanPrint: false,
   agentDetails: null,
+  activePrint: null,
   activeManualJob: null
 };
 
@@ -99,6 +100,33 @@ function toast(message) {
   toast.timer = window.setTimeout(() => {
     elements.toast.hidden = true;
   }, 3600);
+}
+
+function printStageText(stage) {
+  if (stage === 'printing') return 'Printing...';
+  if (stage === 'refreshing') return 'Updating...';
+  return 'Preparing...';
+}
+
+function printCountText(count) {
+  return `${count} order packet${count === 1 ? '' : 's'}`;
+}
+
+function setActivePrint(activePrint) {
+  state.activePrint = activePrint;
+  renderOrders();
+}
+
+function updateActivePrintStage(stage) {
+  if (!state.activePrint) return;
+  state.activePrint = { ...state.activePrint, stage };
+  renderOrders();
+}
+
+function clearActivePrint() {
+  if (!state.activePrint) return;
+  state.activePrint = null;
+  renderOrders();
 }
 
 async function api(path, options = {}) {
@@ -482,6 +510,8 @@ function renderGroupRow(group) {
   const readiness = groupReadiness(summary);
   const actionName = groupName();
   const selectedCount = group.orders.filter((order) => state.selected.has(order.orderNumber)).length;
+  const isBusy = Boolean(state.activePrint);
+  const isActiveGroup = state.activePrint?.type === 'group' && state.activePrint.groupId === group.id;
   const blockedText = summary.blockedOrders > 0
     ? `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} still have warehouse packing left`
     : '';
@@ -489,9 +519,13 @@ function renderGroupRow(group) {
     ? `Missing ${Array.from(summary.missingLabels).slice(0, 3).join(', ')}`
     : 'No missing documents';
   const disabledText = [blockedText, summary.missingOrders > 0 ? missingText : ''].filter(Boolean).join('. ');
-  const printLabel = summary.printedOrders === summary.total ? `Reprint ${actionName}` : `Print ${actionName}`;
-  const disabled = summary.canPrint ? '' : 'disabled';
-  const disabledTitle = summary.canPrint ? '' : ` title="${escapeHtml(disabledText)}"`;
+  const defaultPrintLabel = summary.printedOrders === summary.total ? `Reprint ${actionName}` : `Print ${actionName}`;
+  const printLabel = isActiveGroup ? printStageText(state.activePrint.stage) : defaultPrintLabel;
+  const disabled = summary.canPrint && !isBusy ? '' : 'disabled';
+  const disabledTitle = summary.canPrint
+    ? (isBusy && !isActiveGroup ? ' title="Another print job is processing"' : '')
+    : ` title="${escapeHtml(disabledText)}"`;
+  const busyClass = isActiveGroup ? ' is-busy' : '';
 
   return `
     <tr class="group-row group-status-${readiness.key}">
@@ -519,7 +553,7 @@ function renderGroupRow(group) {
             ${selectedCount > 0 ? `<span>${selectedCount} selected</span>` : ''}
           </div>
           <div class="group-actions">
-            <button class="button secondary group-print" type="button" data-group-id="${group.id}" ${disabled}${disabledTitle}>${escapeHtml(printLabel)}</button>
+            <button class="button secondary group-print${busyClass}" type="button" data-group-id="${group.id}" ${disabled}${disabledTitle}>${escapeHtml(printLabel)}</button>
           </div>
         </div>
       </td>
@@ -539,9 +573,14 @@ function syncGroupCheckboxes() {
 
 function renderSelection() {
   const count = state.selected.size;
+  const isBusy = Boolean(state.activePrint);
+  const isActiveBulk = state.activePrint?.type === 'selected';
   elements.selectionLabel.textContent = count === 0 ? 'No orders selected' : `${count} order${count === 1 ? '' : 's'} selected`;
-  elements.printSelectedButton.disabled = count === 0;
-  elements.markPrintedButton.disabled = count === 0;
+  elements.printSelectedButton.disabled = count === 0 || isBusy;
+  elements.printSelectedButton.textContent = isActiveBulk ? printStageText(state.activePrint.stage) : 'Print selected';
+  elements.printSelectedButton.classList.toggle('is-busy', isActiveBulk);
+  elements.markPrintedButton.disabled = count === 0 || isBusy;
+  elements.selectAll.disabled = isBusy;
   elements.selectAll.checked = state.visibleOrders.length > 0 && state.visibleOrders.every((order) => state.selected.has(order.orderNumber));
   elements.selectAll.indeterminate = count > 0 && !elements.selectAll.checked;
 }
@@ -594,12 +633,19 @@ function renderOrders() {
         : '';
       const note = context.orderNote ? `<small class="context-note">${escapeHtml(context.orderNote)}</small>` : '';
       const printBlocked = hasPackingLeft(order);
-      const printBlockedTitle = printBlocked ? ` title="${escapeHtml(`Packing left: ${packingText}`)}" disabled` : '';
+      const isBusy = Boolean(state.activePrint);
+      const isActiveOrder = state.activePrint?.type === 'order' && state.activePrint.orderNumber === order.orderNumber;
+      const rowPrintLabel = isActiveOrder ? printStageText(state.activePrint.stage) : 'Print';
+      const rowPrintTitle = printBlocked
+        ? ` title="${escapeHtml(`Packing left: ${packingText}`)}"`
+        : (isBusy && !isActiveOrder ? ' title="Another print job is processing"' : '');
+      const rowPrintDisabled = printBlocked || isBusy ? ' disabled' : '';
+      const rowPrintBusyClass = isActiveOrder ? ' is-busy' : '';
 
       rows.push(`
         <tr>
           <td>
-            <input class="order-checkbox" type="checkbox" value="${order.orderNumber}" ${state.selected.has(order.orderNumber) ? 'checked' : ''}>
+            <input class="order-checkbox" type="checkbox" value="${order.orderNumber}" ${state.selected.has(order.orderNumber) ? 'checked' : ''} ${isBusy ? 'disabled' : ''}>
           </td>
           <td>
             <div class="order-meta">
@@ -632,7 +678,7 @@ function renderOrders() {
           <td><span class="packet-status status-${order.packetStatus}">${packetLabel(order.packetStatus)}</span></td>
           <td>
             <div class="row-actions">
-              <button class="button secondary row-print" type="button" data-order="${order.orderNumber}"${printBlockedTitle}>Print</button>
+              <button class="button secondary row-print${rowPrintBusyClass}" type="button" data-order="${order.orderNumber}"${rowPrintTitle}${rowPrintDisabled}>${escapeHtml(rowPrintLabel)}</button>
             </div>
           </td>
         </tr>
@@ -847,6 +893,7 @@ async function createPrintJob(orderNumbers) {
     body: JSON.stringify({
       user: state.user,
       orderNumbers,
+      deliveryDate: state.deliveryDate,
       documentTypes: state.defaults.documentTypes,
       printerName: state.defaults.printerName,
       options: state.defaults
@@ -910,28 +957,50 @@ function closeManualDialog() {
   state.activeManualJob = null;
 }
 
-async function printOrders(orderNumbers) {
+async function printOrders(orderNumbers, source = {}) {
   if (orderNumbers.length === 0) return;
+  if (state.activePrint) return;
   if (!confirmIncompletePackets(orderNumbers)) return;
-  const jobPayload = await createPrintJob(orderNumbers);
 
-  if (!state.agentOnline) {
-    showManualDialog(jobPayload);
-    toast('Local print agent is offline');
-    return;
+  setActivePrint({
+    type: source.type || 'orders',
+    groupId: source.groupId || '',
+    orderNumber: source.orderNumber || '',
+    stage: 'preparing'
+  });
+  toast(`Preparing ${printCountText(orderNumbers.length)}`);
+
+  try {
+    const jobPayload = await createPrintJob(orderNumbers);
+
+    if (!state.agentOnline) {
+      showManualDialog(jobPayload);
+      clearActivePrint();
+      toast('Local print agent is offline');
+      return;
+    }
+
+    if (!state.agentCanPrint) {
+      showManualDialog(jobPayload);
+      clearActivePrint();
+      toast('Local print bridge is not installed');
+      return;
+    }
+
+    updateActivePrintStage('printing');
+    toast(`Sending ${printCountText(orderNumbers.length)} to local printer`);
+    await sendToAgent(jobPayload);
+    updateActivePrintStage('refreshing');
+    toast('Updating print status');
+    state.selected.clear();
+    await loadOrders();
+    toast('Print job completed');
+  } catch (error) {
+    console.error(error);
+    toast(error.message || 'Print job failed');
+  } finally {
+    clearActivePrint();
   }
-
-  if (!state.agentCanPrint) {
-    showManualDialog(jobPayload);
-    toast('Local print bridge is not installed');
-    return;
-  }
-
-  toast('Sending packet to local printer');
-  await sendToAgent(jobPayload);
-  state.selected.clear();
-  await loadOrders();
-  toast('Print job completed');
 }
 
 async function markPrinted(orderNumbers) {
@@ -1039,12 +1108,21 @@ function bindEvents() {
     if (groupButton) {
       const group = state.groupIndex.get(groupButton.dataset.groupId);
       if (!group || groupButton.disabled) return;
-      await printOrders(group.orders.map((order) => order.orderNumber));
+      await printOrders(group.orders.map((order) => order.orderNumber), {
+        type: 'group',
+        groupId: group.id
+      });
       return;
     }
 
     const button = event.target.closest('.row-print');
-    if (button) await printOrders([button.dataset.order]);
+    if (button) {
+      if (button.disabled) return;
+      await printOrders([button.dataset.order], {
+        type: 'order',
+        orderNumber: button.dataset.order
+      });
+    }
   });
 
   elements.selectAll.addEventListener('change', () => {
@@ -1057,7 +1135,7 @@ function bindEvents() {
   });
 
   elements.printSelectedButton.addEventListener('click', async () => {
-    await printOrders(selectedOrderNumbers());
+    await printOrders(selectedOrderNumbers(), { type: 'selected' });
   });
 
   elements.markPrintedButton.addEventListener('click', async () => {

@@ -610,6 +610,24 @@ async function listCurrentOrders(storage, store, orderContext, config, cache, op
   return refreshOrdersCache(storage, store, orderContext, config, cache, options);
 }
 
+async function listOrdersForPrintJob(storage, store, orderContext, config, cache, orderNumbers, deliveryDate) {
+  const normalizedDeliveryDate = String(deliveryDate || '').trim();
+  if (normalizedDeliveryDate) {
+    const dateScoped = await listCurrentOrders(storage, store, orderContext, config, cache, {
+      deliveryDate: normalizedDeliveryDate
+    });
+    const byOrderNumber = new Map(dateScoped.orders.map((order) => [order.orderNumber, order]));
+    if (orderNumbers.every((orderNumber) => byOrderNumber.has(orderNumber))) {
+      return {
+        ...dateScoped,
+        orders: orderNumbers.map((orderNumber) => byOrderNumber.get(orderNumber))
+      };
+    }
+  }
+
+  return listCurrentOrders(storage, store, orderContext, config, cache, { orderNumbers });
+}
+
 function todayInStockholm() {
   return new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Stockholm',
@@ -728,7 +746,15 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
 
-    const { orders } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { orderNumbers });
+    const { orders } = await listOrdersForPrintJob(
+      storage,
+      store,
+      orderContext,
+      config,
+      ordersCache,
+      orderNumbers,
+      body.deliveryDate
+    );
     const byOrderNumber = new Map(orders.map((order) => [order.orderNumber, order]));
     const packingBlockedOrders = orderNumbers
       .map((orderNumber) => byOrderNumber.get(orderNumber))

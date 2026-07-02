@@ -350,6 +350,31 @@ select:focus {
   opacity: 0.5;
 }
 
+.button.is-busy {
+  gap: 8px;
+}
+
+.button.is-busy:disabled {
+  opacity: 1;
+}
+
+.button.is-busy::before {
+  animation: spin 800ms linear infinite;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  content: "";
+  flex: 0 0 auto;
+  height: 12px;
+  width: 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .checkbox-line {
   display: inline-flex;
   align-items: center;
