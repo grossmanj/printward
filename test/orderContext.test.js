@@ -77,7 +77,8 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /WHERE a\.EmpNo = o\.Rsp/);
   assert.match(queries[1], /AND ISNULL\(o\.Rsp, 0\) > 0/);
   assert.match(queries[1], /ISNULL\(packer\.Nm, ''\) AS PackerName/);
-  assert.match(queries[1], /CASE WHEN ISNULL\(o\.SupNo, 0\) > 0 THEN 1 ELSE 0 END AS FreightRequired/);
+  assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) NOT IN \(55058127\)/);
+  assert.match(queries[1], /LOWER\(LTRIM\(RTRIM\(ISNULL\(distributor\.Nm, ''\)\)\)\) NOT IN \('best transport ab'\)/);
   assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 3);
   assert.match(queries[1], /LinesLeftToPack AS/);
   assert.match(queries[1], /QuantityLeftToPack = CAST\(ROUND\(SUM\(ISNULL\(NoInvoAb, 0\)\), 2\) AS DECIMAL\(18, 2\)\)/);
@@ -144,4 +145,50 @@ test('SQL order context marks external distributors as freight-required', async 
     linesLeft: 2,
     quantityLeft: 6
   }]);
+});
+
+test('SQL order context treats Best Transport as freight-optional for now', async () => {
+  const client = new SqlServerOrderContextClient({
+    maxOrdersPerQuery: 500,
+    freightBookedStatuses: [2, 8]
+  });
+
+  client.getSql = async () => ({ Int: 'Int' });
+  client.getPool = async () => ({
+    request() {
+      return {
+        input() {},
+        async query() {
+          return {
+            recordsets: [
+              [{
+                OrdNo: 124,
+                CustNo: 456,
+                Nm: 'Customer AB',
+                CustomerName: 'Customer AB',
+                SupNo: 55058127,
+                DistributorName: 'Best Transport AB',
+                DelDt: 20260702,
+                DelPri: 12,
+                DelMt: 5,
+                TrTp: 1,
+                OrdTp: 1,
+                OrdPrSt: 8
+              }],
+              [{ OrdNo: 124, LineCount: 1, TotalQuantity: 4 }],
+              [{ OrdNo: 124, LnNo: 1, ProdNo: 'P1', Descr: 'Product', Quantity: 4, Unit: 'kg', Note: '' }],
+              []
+            ]
+          };
+        }
+      };
+    }
+  });
+
+  const contexts = await client.fetchBatch([124]);
+  const context = contexts.get('124');
+
+  assert.equal(context.distributorNo, 55058127);
+  assert.equal(context.distributorName, 'Best Transport AB');
+  assert.equal(context.freightRequired, false);
 });

@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 const ACTIVE_ORDER_CANCELLED_MASK = 536870912;
 const ACTIVE_ORDER_PROCESSED_MASK = 12582912;
 const DEFAULT_ACTIVE_ORDER_TYPES = new Set([1, 6, 9]);
+const FREIGHT_OPTIONAL_DISTRIBUTOR_NOS = new Set([55058127]);
+const FREIGHT_OPTIONAL_DISTRIBUTOR_NAMES = new Set(['best transport ab']);
 
 function normalizeOrderNumber(value) {
   return String(value || '').trim();
@@ -73,6 +75,17 @@ function normalizeLine(line) {
   };
 }
 
+function normalizeDistributorName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isFreightRequiredForDistributor(distributorNo, distributorName) {
+  if (distributorNo <= 0) return false;
+  if (FREIGHT_OPTIONAL_DISTRIBUTOR_NOS.has(distributorNo)) return false;
+  if (FREIGHT_OPTIONAL_DISTRIBUTOR_NAMES.has(normalizeDistributorName(distributorName))) return false;
+  return true;
+}
+
 function packingDepartmentLabel(row) {
   const bit = Number(row.departmentBit ?? row.DepartmentBit ?? 0);
   if (bit === 1) return 'Dry';
@@ -116,7 +129,7 @@ function normalizeOrderContext(row, lines = [], packingDepartments = []) {
   ]);
   const distributorNo = Number(row.distributorNo ?? row.SupNo ?? 0) || 0;
   const distributorName = String(row.distributorName ?? row.DistributorName ?? '').trim();
-  const freightRequired = distributorNo > 0;
+  const freightRequired = isFreightRequiredForDistributor(distributorNo, distributorName);
   const packerNo = Number(row.packerNo ?? row.Rsp ?? 0) || 0;
   const packerName = packerNo > 0 ? String(row.packerName ?? row.PackerName ?? '').trim() : '';
 
@@ -381,7 +394,13 @@ export class SqlServerOrderContextClient {
         ISNULL(NULLIF(o.Nm, ''), ISNULL(customer.Nm, '')) AS CustomerName,
         ISNULL(distributor.Nm, '') AS DistributorName,
         ISNULL(packer.Nm, '') AS PackerName,
-        CASE WHEN ISNULL(o.SupNo, 0) > 0 THEN 1 ELSE 0 END AS FreightRequired,
+        CASE
+          WHEN ISNULL(o.SupNo, 0) > 0
+           AND ISNULL(o.SupNo, 0) NOT IN (55058127)
+           AND LOWER(LTRIM(RTRIM(ISNULL(distributor.Nm, '')))) NOT IN ('best transport ab')
+          THEN 1
+          ELSE 0
+        END AS FreightRequired,
         ISNULL(freight.Val1, 0) AS FreightStatus,
         ISNULL(freight.Txt1, '') AS FreightConsignmentFresh,
         ISNULL(freight.Txt2, '') AS FreightConsignmentFrozen
