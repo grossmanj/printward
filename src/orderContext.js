@@ -318,6 +318,7 @@ export class SqlServerOrderContextClient {
       WHERE o.DelDt = @delDt
         AND o.TrTp = 1
         AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
+        AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
         AND ISNULL(o.DelMt, 0) NOT IN (150, 151)
       ORDER BY ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo;
     `;
@@ -427,6 +428,7 @@ export class SqlServerOrderContextClient {
       ) freight
       WHERE o.TrTp = 1
         AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
+        AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
         AND ISNULL(o.DelMt, 0) NOT IN (150, 151);
 
       SELECT
