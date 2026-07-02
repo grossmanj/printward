@@ -10,7 +10,7 @@ $NodeDir = Join-Path $InstallRoot "node"
 $ToolsDir = Join-Path $InstallRoot "tools"
 $TempDir = Join-Path $env:TEMP ("printward-agent-install-" + [guid]::NewGuid().ToString("N"))
 $Port = 37951
-$RepoZipUrl = "https://github.com/grossmanj/printward/archive/refs/heads/main.zip"
+$RepoZipUrl = "https://codeload.github.com/grossmanj/printward/zip/refs/heads/main"
 $NodeIndexUrl = "https://nodejs.org/dist/latest-v20.x/"
 $SumatraZipUrl = "https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip"
 
