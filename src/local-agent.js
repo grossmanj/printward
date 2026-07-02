@@ -9,6 +9,19 @@ import { PDFDocument } from 'pdf-lib';
 const execFileAsync = promisify(execFile);
 const AGENT_PORT = Number(process.env.PRINTWARD_AGENT_PORT || 37951);
 
+function logFatalError(label, error) {
+  console.error(`[${label}] ${error?.stack || error?.message || error}`);
+}
+
+process.on('uncaughtException', (error) => {
+  logFatalError('uncaughtException', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (error) => {
+  logFatalError('unhandledRejection', error);
+});
+
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
@@ -343,6 +356,11 @@ const server = http.createServer(async (req, res) => {
       results: error.results || []
     });
   }
+});
+
+server.on('error', (error) => {
+  logFatalError('listenError', error);
+  process.exit(1);
 });
 
 server.listen(AGENT_PORT, '127.0.0.1', () => {

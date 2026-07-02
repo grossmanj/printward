@@ -8,6 +8,7 @@ $InstallRoot = Join-Path $env:LOCALAPPDATA "PrintwardAgent"
 $AppDir = Join-Path $InstallRoot "app"
 $NodeDir = Join-Path $InstallRoot "node"
 $ToolsDir = Join-Path $InstallRoot "tools"
+$LogPath = Join-Path $InstallRoot "agent.log"
 $TempDir = Join-Path $env:TEMP ("printward-agent-install-" + [guid]::NewGuid().ToString("N"))
 $Port = 37951
 $RepoZipUrl = "https://codeload.github.com/grossmanj/printward/zip/refs/heads/main"
@@ -24,6 +25,35 @@ function Write-Step($Message) {
 function Download-File($Url, $Destination) {
   Write-Host "Downloading $Url"
   Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+}
+
+function Show-AgentLog($Path) {
+  Write-Host ""
+  Write-Host "Agent log: $Path"
+  if (Test-Path $Path) {
+    Write-Host "Last agent log lines:"
+    Get-Content -Path $Path -Tail 80 | ForEach-Object { Write-Host $_ }
+  } else {
+    Write-Host "Agent log file was not created."
+  }
+}
+
+function Get-AgentHealth($Url) {
+  $request = [System.Net.HttpWebRequest]::Create($Url)
+  $request.Proxy = $null
+  $request.Timeout = 3000
+  $request.ReadWriteTimeout = 3000
+  $response = $request.GetResponse()
+  try {
+    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+    try {
+      return ($reader.ReadToEnd() | ConvertFrom-Json)
+    } finally {
+      $reader.Dispose()
+    }
+  } finally {
+    $response.Dispose()
+  }
 }
 
 function Stop-AgentOnPort($LocalPort) {
@@ -118,13 +148,25 @@ function Install-Sumatra {
 
 function Write-StartScript($NodeExe, $SumatraExe) {
   $startCmd = Join-Path $InstallRoot "start-agent.cmd"
-  $logPath = Join-Path $InstallRoot "agent.log"
   $content = @"
 @echo off
-set PRINTWARD_AGENT_PORT=$Port
-set PRINTWARD_PDF_PRINT_EXE=$SumatraExe
+set "PRINTWARD_AGENT_PORT=$Port"
+set "PRINTWARD_PDF_PRINT_EXE=$SumatraExe"
+echo Starting Printward Agent %DATE% %TIME% > "$LogPath"
+echo Node: $NodeExe >> "$LogPath"
+echo App: $AppDir >> "$LogPath"
+if not exist "$NodeExe" (
+  echo Node executable missing: $NodeExe >> "$LogPath"
+  exit /b 1
+)
+if not exist "$AppDir\src\local-agent.js" (
+  echo Agent script missing: $AppDir\src\local-agent.js >> "$LogPath"
+  exit /b 1
+)
 cd /d "$AppDir"
-"$NodeExe" "$AppDir\src\local-agent.js" >> "$logPath" 2>&1
+"$NodeExe" "$AppDir\src\local-agent.js" >> "$LogPath" 2>&1
+echo Agent exited with code %ERRORLEVEL% >> "$LogPath"
+exit /b %ERRORLEVEL%
 "@
   Set-Content -Path $startCmd -Value $content -Encoding ASCII
   return $startCmd
@@ -139,19 +181,44 @@ function Register-StartupTask($StartCmd) {
 
 function Start-And-Verify($StartCmd) {
   Write-Step "Starting Printward Agent"
-  Start-Process -FilePath $StartCmd -WindowStyle Hidden
-  Start-Sleep -Seconds 3
-
+  $process = Start-Process -FilePath $StartCmd -WindowStyle Hidden -PassThru
   $healthUrl = "http://127.0.0.1:$Port/health"
-  $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 10
-  if (-not $health.ok) {
-    throw "Printward Agent did not return ok=true."
+  $deadline = (Get-Date).AddSeconds(45)
+  $lastError = $null
+
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 750
+
+    try {
+      $health = Get-AgentHealth $healthUrl
+      if ($health.ok) {
+        Write-Host ""
+        Write-Host "Printward Agent is installed and running."
+        Write-Host "Health URL: $healthUrl"
+        Write-Host "Install path: $InstallRoot"
+        Write-Host "Log path: $LogPath"
+        return
+      }
+    } catch {
+      $lastError = $_.Exception.Message
+    }
+
+    if ($process.HasExited) {
+      break
+    }
   }
 
   Write-Host ""
-  Write-Host "Printward Agent is installed and running."
-  Write-Host "Health URL: $healthUrl"
-  Write-Host "Install path: $InstallRoot"
+  if ($process.HasExited) {
+    Write-Host "Printward Agent process exited with code $($process.ExitCode)."
+  } else {
+    Write-Host "Printward Agent process is still running, but health check did not answer."
+  }
+  if ($lastError) {
+    Write-Host "Last health check error: $lastError"
+  }
+  Show-AgentLog $LogPath
+  throw "Printward Agent did not answer at $healthUrl."
 }
 
 try {
