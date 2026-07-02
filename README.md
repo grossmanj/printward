@@ -45,6 +45,21 @@ The agent listens on:
 http://127.0.0.1:37951
 ```
 
+On Windows, run the agent from PowerShell on the same PC that has the printer installed:
+
+```powershell
+npm install
+npm run agent
+```
+
+Then verify the browser on that same PC can reach:
+
+```text
+http://127.0.0.1:37951/health
+```
+
+If Printward still says the agent is unavailable, open Settings and confirm the Local agent URL is exactly `http://127.0.0.1:37951`. The URL is intentionally local: it points to the user's own PC, not the Cloud Run service.
+
 ## Configure Google Cloud Storage
 
 The current Nordward PDF service writes order PDFs under one bucket with company/environment prefixes:
@@ -279,7 +294,7 @@ StapleLocation=UpperLeft
 
 Printer finishing options vary by driver. Change the staple option in Settings to match the local printer's CUPS option.
 
-Windows direct printer finishing is not implemented in this dependency-free prototype because it usually requires a native PDF print tool or printer-specific driver integration.
+Windows direct printer finishing is not implemented in this dependency-free prototype because it usually requires a native PDF print tool or printer-specific driver integration. The Windows agent can currently report health and installed printers, but printing PDFs from Windows still needs a native print bridge.
 
 ## API
 
