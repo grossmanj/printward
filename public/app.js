@@ -14,11 +14,14 @@ const state = {
   defaults: {},
   user: localStorage.getItem('printward:user') || 'operator',
   agentOnline: false,
+  agentCanPrint: false,
+  agentDetails: null,
   activeManualJob: null
 };
 
 const elements = {
   storageLabel: document.querySelector('#storageLabel'),
+  agentStatus: document.querySelector('#agentStatus'),
   refreshButton: document.querySelector('#refreshButton'),
   settingsButton: document.querySelector('#settingsButton'),
   searchInput: document.querySelector('#searchInput'),
@@ -45,6 +48,7 @@ const elements = {
   duplexInput: document.querySelector('#duplexInput'),
   stapleInput: document.querySelector('#stapleInput'),
   stapleOptionInput: document.querySelector('#stapleOptionInput'),
+  installAgentButton: document.querySelector('#installAgentButton'),
   testAgentButton: document.querySelector('#testAgentButton'),
   docTypeInputs: Array.from(document.querySelectorAll('.doc-type-input')),
   totalOrders: document.querySelector('#totalOrders'),
@@ -711,13 +715,29 @@ async function checkAgent() {
   try {
     const response = await fetch(`${agentUrl}/health`, { signal: controller.signal });
     state.agentOnline = response.ok;
+    state.agentDetails = response.ok ? await response.json().catch(() => ({})) : null;
+    state.agentCanPrint = state.agentOnline && state.agentDetails?.canPrint === true;
   } catch {
     state.agentOnline = false;
+    state.agentCanPrint = false;
+    state.agentDetails = null;
   } finally {
     window.clearTimeout(timeout);
   }
 
+  renderAgentStatus();
   if (state.agentOnline) await loadPrinters();
+}
+
+function renderAgentStatus() {
+  elements.agentStatus.classList.toggle('status-online', state.agentOnline && state.agentCanPrint);
+  elements.agentStatus.classList.toggle('status-warning', state.agentOnline && !state.agentCanPrint);
+  elements.agentStatus.classList.toggle('status-offline', !state.agentOnline);
+  elements.agentStatus.textContent = !state.agentOnline
+    ? 'Agent offline'
+    : state.agentCanPrint
+      ? 'Agent online'
+      : 'Agent setup needed';
 }
 
 async function loadPrinters() {
@@ -874,6 +894,12 @@ async function printOrders(orderNumbers) {
     return;
   }
 
+  if (!state.agentCanPrint) {
+    showManualDialog(jobPayload);
+    toast('Local print bridge is not installed');
+    return;
+  }
+
   toast('Sending packet to local printer');
   await sendToAgent(jobPayload);
   state.selected.clear();
@@ -1023,10 +1049,17 @@ function bindEvents() {
     if (event.target === elements.settingsPanel) setSettingsOpen(false);
   });
   elements.settingsForm.addEventListener('submit', saveSettings);
+  elements.installAgentButton.addEventListener('click', () => {
+    toast('Installer downloaded. Run it in PowerShell on this PC.');
+  });
   elements.testAgentButton.addEventListener('click', async () => {
     state.defaults = { ...state.defaults, ...readSettingsForm() };
     await checkAgent();
-    toast(state.agentOnline ? 'Local print agent is reachable' : 'Local print agent is offline');
+    toast(!state.agentOnline
+      ? 'Local print agent is offline'
+      : state.agentCanPrint
+        ? 'Local print agent is ready'
+        : 'Local agent reachable, print bridge missing');
   });
 
   elements.closeManualButton.addEventListener('click', closeManualDialog);

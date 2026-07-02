@@ -45,11 +45,10 @@ The agent listens on:
 http://127.0.0.1:37951
 ```
 
-On Windows, run the agent from PowerShell on the same PC that has the printer installed:
+On Windows, users can click **Install print agent** in Printward Settings to download the installer script. Run it from PowerShell on the same PC that has the printer installed:
 
 ```powershell
-npm install
-npm run agent
+powershell -ExecutionPolicy Bypass -File .\install-print-agent.ps1
 ```
 
 Then verify the browser on that same PC can reach:
@@ -294,7 +293,7 @@ StapleLocation=UpperLeft
 
 Printer finishing options vary by driver. Change the staple option in Settings to match the local printer's CUPS option.
 
-Windows direct printer finishing is not implemented in this dependency-free prototype because it usually requires a native PDF print tool or printer-specific driver integration. The Windows agent can currently report health and installed printers, but printing PDFs from Windows still needs a native print bridge.
+On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each order packet into one PDF before printing, so printer-driver defaults such as stapling have the best chance of applying per order packet. Advanced finishing options still depend on the installed Windows printer driver.
 
 ## API
 

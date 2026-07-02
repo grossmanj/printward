@@ -16,6 +16,7 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <span id="agentStatus" class="agent-status status-offline">Agent checking</span>
         <button id="refreshButton" class="button secondary" type="button">Refresh</button>
         <button id="settingsButton" class="button primary" type="button">Settings</button>
         <a class="button secondary" href="/logout">Logout</a>
@@ -210,6 +211,7 @@
         </fieldset>
 
         <div class="panel-actions">
+          <a class="button secondary" id="installAgentButton" href="/install-print-agent.ps1" download="install-print-agent.ps1">Install print agent</a>
           <button class="button secondary" id="testAgentButton" type="button">Test agent</button>
           <button class="button primary" type="submit">Save defaults</button>
         </div>

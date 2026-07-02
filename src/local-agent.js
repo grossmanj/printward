@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { PDFDocument } from 'pdf-lib';
 
 const execFileAsync = promisify(execFile);
 const AGENT_PORT = Number(process.env.PRINTWARD_AGENT_PORT || 37951);
@@ -89,6 +90,31 @@ async function listPrinters() {
   return listCupsPrinters();
 }
 
+async function pathExists(filePath) {
+  if (!filePath) return false;
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findWindowsPdfPrintBridge() {
+  const candidates = [
+    process.env.PRINTWARD_PDF_PRINT_EXE,
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'PrintwardAgent', 'tools', 'SumatraPDF.exe'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'SumatraPDF', 'SumatraPDF.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'SumatraPDF', 'SumatraPDF.exe')
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return candidate;
+  }
+
+  return null;
+}
+
 function safeFileName(value) {
   return String(value || 'document.pdf').replace(/[^0-9A-Za-z._-]+/g, '_');
 }
@@ -103,6 +129,20 @@ async function downloadDocument(document, dir) {
   const filePath = path.join(dir, safeFileName(`${document.orderNumber}-${document.type}-${document.fileName}`));
   await fs.writeFile(filePath, body);
   return filePath;
+}
+
+async function mergePdfFiles(files, outputPath) {
+  if (files.length === 1) return files[0];
+
+  const merged = await PDFDocument.create();
+  for (const file of files) {
+    const source = await PDFDocument.load(await fs.readFile(file));
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    for (const page of pages) merged.addPage(page);
+  }
+
+  await fs.writeFile(outputPath, await merged.save());
+  return outputPath;
 }
 
 function cupsArgsForOptions(printerName, options, files) {
@@ -142,6 +182,41 @@ async function printWithCups(order, files, printerName, options) {
   };
 }
 
+function sumatraPrintSettings(options) {
+  const settings = [];
+  const copies = Math.max(1, Number(options.copies || 1));
+  if (copies > 1) settings.push(`${copies}x`);
+  if (options.duplex === true) settings.push('duplex');
+  if (options.duplex === false) settings.push('simplex');
+  if (options.colorMode === 'grayscale') settings.push('monochrome');
+  return settings.join(',');
+}
+
+async function printWithSumatra(order, files, printerName, options, dir) {
+  const printBridge = await findWindowsPdfPrintBridge();
+  if (!printBridge) {
+    throw new Error('Windows PDF print bridge is not installed. Use Settings > Install print agent, then run the installer on this PC.');
+  }
+
+  const packetPath = await mergePdfFiles(files, path.join(dir, safeFileName(`order-${order.orderNumber}-packet.pdf`)));
+  const args = ['-silent'];
+  const settings = sumatraPrintSettings(options);
+  if (settings) args.push('-print-settings', settings);
+
+  const normalizedPrinter = normalizePrinterName(printerName || options.printerName);
+  if (normalizedPrinter) args.push('-print-to', normalizedPrinter);
+  else args.push('-print-to-default');
+  args.push(packetPath);
+
+  const { stdout, stderr } = await execFileAsync(printBridge, args, { windowsHide: true });
+  return {
+    orderNumber: order.orderNumber,
+    command: 'SumatraPDF',
+    fileCount: files.length,
+    output: `${stdout || ''}${stderr || ''}`.trim()
+  };
+}
+
 async function printOrder(order, dir, printerName, options) {
   const files = [];
   for (const document of order.documents || []) {
@@ -157,10 +232,26 @@ async function printOrder(order, dir, printerName, options) {
   }
 
   if (os.platform() === 'win32') {
-    throw new Error('Windows printing requires a native PDF print bridge; CUPS lp is not available.');
+    return printWithSumatra(order, files, printerName, options, dir);
   }
 
   return printWithCups(order, files, printerName, options);
+}
+
+async function printCapability() {
+  if (os.platform() === 'win32') {
+    const printBridge = await findWindowsPdfPrintBridge();
+    return {
+      canPrint: Boolean(printBridge),
+      printBridge: printBridge ? path.basename(printBridge) : null
+    };
+  }
+
+  const canPrint = await commandExists('lp');
+  return {
+    canPrint,
+    printBridge: canPrint ? 'lp' : null
+  };
 }
 
 async function reportCompletion(callbackUrl, payload) {
@@ -222,10 +313,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && requestUrl.pathname === '/health') {
+      const capability = await printCapability();
       sendJson(res, 200, {
         ok: true,
         platform: os.platform(),
-        hostname: os.hostname()
+        hostname: os.hostname(),
+        ...capability
       });
       return;
     }

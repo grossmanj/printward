@@ -88,6 +88,38 @@ select {
   gap: 10px;
 }
 
+.agent-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.agent-status.status-online {
+  border-color: rgba(22, 121, 76, 0.28);
+  background: rgba(22, 121, 76, 0.09);
+  color: var(--success);
+}
+
+.agent-status.status-warning {
+  border-color: #e2bd78;
+  background: #fff4df;
+  color: #7a4a00;
+}
+
+.agent-status.status-offline {
+  border-color: rgba(180, 35, 24, 0.22);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
 .page {
   width: min(1480px, 100%);
   margin: 0 auto;
