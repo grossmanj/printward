@@ -67,8 +67,8 @@ test('SQL order context filters sales transaction headers', async () => {
   await client.getByDeliveryDate('2026-07-01');
   await client.fetchBatch([1956705]);
 
-  assert.match(queries[0], /WHERE o\.DelDt = @delDt\s+AND o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0\s+AND \(\(ISNULL\(o\.OrdPrSt, 0\) & 8\) = 8 OR \(ISNULL\(o\.OrdPrSt, 0\) & 8192\) = 8192\)\s+AND ISNULL\(o\.DelMt, 0\) NOT IN \(150, 151, 152\)/);
-  assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0\s+AND \(\(ISNULL\(o\.OrdPrSt, 0\) & 8\) = 8 OR \(ISNULL\(o\.OrdPrSt, 0\) & 8192\) = 8192\)\s+AND ISNULL\(o\.DelMt, 0\) NOT IN \(150, 151, 152\);/);
+  assert.match(queries[0], /WHERE o\.DelDt = @delDt\s+AND o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0\s+AND \(\(ISNULL\(o\.OrdPrSt, 0\) & 8\) = 8 OR \(ISNULL\(o\.OrdPrSt, 0\) & 8192\) = 8192\)\s+AND ISNULL\(o\.DelMt, 0\) NOT IN \(6, 40, 150, 151, 152\)/);
+  assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0\s+AND \(\(ISNULL\(o\.OrdPrSt, 0\) & 8\) = 8 OR \(ISNULL\(o\.OrdPrSt, 0\) & 8192\) = 8192\)\s+AND ISNULL\(o\.DelMt, 0\) NOT IN \(6, 40, 150, 151, 152\);/);
   assert.match(queries[1], /ISNULL\(NULLIF\(o\.Nm, ''\), ISNULL\(customer\.Nm, ''\)\) AS CustomerName/);
   assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) AS SupNo/);
   assert.match(queries[1], /WHERE a\.SupNo = o\.SupNo/);
