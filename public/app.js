@@ -17,6 +17,10 @@ const state = {
   agentOnline: false,
   agentCanPrint: false,
   agentDetails: null,
+  ordersLoading: false,
+  ordersLoadingText: '',
+  ordersLoadError: '',
+  ordersRequestId: 0,
   activePrint: null,
   activeManualJob: null
 };
@@ -35,6 +39,7 @@ const elements = {
   groupInput: document.querySelector('#groupInput'),
   selectAll: document.querySelector('#selectAll'),
   selectionLabel: document.querySelector('#selectionLabel'),
+  ordersLoadingStatus: document.querySelector('#ordersLoadingStatus'),
   printSelectedButton: document.querySelector('#printSelectedButton'),
   markPrintedButton: document.querySelector('#markPrintedButton'),
   expandGroupsButton: document.querySelector('#expandGroupsButton'),
@@ -304,6 +309,32 @@ function resetExpandedGroups() {
   state.expandedGroups.clear();
 }
 
+function orderLoadingText(options = {}) {
+  const action = options.refresh ? 'Refreshing' : 'Loading';
+  return `${action} orders for ${formatDate(state.deliveryDate)}`;
+}
+
+function renderOrdersLoadingStatus() {
+  const text = state.ordersLoadingText || orderLoadingText();
+  if (elements.ordersLoadingStatus) {
+    elements.ordersLoadingStatus.hidden = !state.ordersLoading;
+    elements.ordersLoadingStatus.innerHTML = state.ordersLoading
+      ? `<span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(text)}</span>`
+      : '';
+  }
+
+  elements.refreshButton.disabled = state.ordersLoading;
+  elements.refreshButton.textContent = state.ordersLoading ? 'Loading...' : 'Refresh';
+  elements.refreshButton.classList.toggle('is-busy', state.ordersLoading);
+}
+
+function setOrdersLoading(isLoading, text = '') {
+  state.ordersLoading = isLoading;
+  state.ordersLoadingText = isLoading ? text : '';
+  renderOrdersLoadingStatus();
+  renderOrders();
+}
+
 function expandAllGroups() {
   state.expandedGroups = new Set(state.groupIndex.keys());
   renderOrders();
@@ -534,7 +565,7 @@ function renderGroupRow(group) {
   const actionName = groupName();
   const selectedCount = group.orders.filter((order) => state.selected.has(order.orderNumber)).length;
   const isExpanded = state.expandedGroups.has(group.id);
-  const isBusy = Boolean(state.activePrint);
+  const isBusy = Boolean(state.activePrint) || state.ordersLoading;
   const isActiveGroup = state.activePrint?.type === 'group' && state.activePrint.groupId === group.id;
   const blockedText = summary.blockedOrders > 0
     ? `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} still have warehouse packing left`
@@ -598,7 +629,7 @@ function syncGroupCheckboxes() {
 
 function renderSelection() {
   const count = state.selected.size;
-  const isBusy = Boolean(state.activePrint);
+  const isBusy = Boolean(state.activePrint) || state.ordersLoading;
   const isActiveBulk = state.activePrint?.type === 'selected';
   const groupIds = Array.from(state.groupIndex.keys());
   const hasGroups = state.group !== 'none' && groupIds.length > 0;
@@ -618,6 +649,38 @@ function renderSelection() {
 
 function renderOrders() {
   state.groupIndex = new Map();
+
+  if (state.ordersLoading) {
+    state.visibleOrders = [];
+    const text = state.ordersLoadingText || orderLoadingText();
+    elements.ordersBody.innerHTML = `
+      <tr>
+        <td colspan="8" class="loading-cell">
+          <div class="loading-state">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <strong>${escapeHtml(text)}</strong>
+            <small>Please wait while Printward gets the current order documents and SQL context.</small>
+          </div>
+        </td>
+      </tr>
+    `;
+    renderSelection();
+    return;
+  }
+
+  if (state.ordersLoadError) {
+    state.visibleOrders = [];
+    elements.ordersBody.innerHTML = `
+      <tr>
+        <td colspan="8" class="empty error">
+          Could not load orders: ${escapeHtml(state.ordersLoadError)}
+        </td>
+      </tr>
+    `;
+    renderSelection();
+    return;
+  }
+
   state.visibleOrders = filteredOrders();
 
   if (state.visibleOrders.length === 0) {
@@ -769,26 +832,48 @@ async function loadDefaults() {
 }
 
 async function loadOrders(options = {}) {
+  const requestId = state.ordersRequestId + 1;
+  state.ordersRequestId = requestId;
+  state.ordersLoadError = '';
+  setOrdersLoading(true, orderLoadingText(options));
+
   const query = new URLSearchParams({
     q: elements.searchInput.value.trim(),
     status: state.status,
     deliveryDate: state.deliveryDate
   });
   if (options.refresh) query.set('refresh', '1');
-  const payload = await api(`/api/orders?${query}`);
-  state.orders = payload.orders;
-  state.summary = payload.summary;
-  state.documentTypes = payload.documentTypes;
-  state.contextStatus = payload.contextStatus || {};
-  renderDistributorFilter();
-  state.visibleOrders = filteredOrders();
-  pruneSelectionToVisibleOrders();
-  syncDocumentTypeControls();
-  renderDateControls();
-  renderSummary();
-  renderOrders();
-  if (state.contextStatus.error) {
-    console.warn('Order context unavailable:', state.contextStatus.error);
+
+  try {
+    const payload = await api(`/api/orders?${query}`);
+    if (requestId !== state.ordersRequestId) return;
+
+    state.orders = payload.orders;
+    state.summary = payload.summary;
+    state.documentTypes = payload.documentTypes;
+    state.contextStatus = payload.contextStatus || {};
+    state.ordersLoading = false;
+    state.ordersLoadingText = '';
+    state.ordersLoadError = '';
+    renderOrdersLoadingStatus();
+    renderDistributorFilter();
+    state.visibleOrders = filteredOrders();
+    pruneSelectionToVisibleOrders();
+    syncDocumentTypeControls();
+    renderDateControls();
+    renderSummary();
+    renderOrders();
+    if (state.contextStatus.error) {
+      console.warn('Order context unavailable:', state.contextStatus.error);
+    }
+  } catch (error) {
+    if (requestId !== state.ordersRequestId) return;
+    state.ordersLoading = false;
+    state.ordersLoadingText = '';
+    state.ordersLoadError = error.message || 'Unknown error';
+    renderOrdersLoadingStatus();
+    renderOrders();
+    throw error;
   }
 }
 

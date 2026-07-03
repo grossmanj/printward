@@ -396,6 +396,37 @@ select:focus {
   gap: 8px;
 }
 
+.orders-loading-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid rgba(15, 107, 111, 0.22);
+  border-radius: 999px;
+  background: rgba(15, 107, 111, 0.08);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.orders-loading-status[hidden] {
+  display: none;
+}
+
+.loading-spinner {
+  animation: spin 800ms linear infinite;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
 .table-shell {
   overflow-x: auto;
   background: var(--panel);
@@ -684,6 +715,40 @@ tr:last-child td {
   padding: 48px;
 }
 
+.empty.error {
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.loading-cell {
+  padding: 42px 24px;
+  color: var(--primary);
+  text-align: center;
+}
+
+.loading-state {
+  display: inline-grid;
+  justify-items: center;
+  gap: 9px;
+  max-width: 520px;
+}
+
+.loading-state .loading-spinner {
+  height: 26px;
+  width: 26px;
+}
+
+.loading-state strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.loading-state small {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .settings-panel,
 .dialog-backdrop {
   position: fixed;
@@ -835,6 +900,11 @@ tr:last-child td {
   .tabs,
   .bulk-actions {
     justify-content: flex-start;
+  }
+
+  .orders-loading-status {
+    margin-left: 0;
+    width: fit-content;
   }
 
   .summary-grid {
