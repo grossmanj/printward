@@ -71,6 +71,58 @@ function sendError(res, error) {
   });
 }
 
+function createEventHub() {
+  const clients = new Set();
+  let nextId = 0;
+
+  function remove(client) {
+    if (!clients.delete(client)) return;
+    clearInterval(client.heartbeat);
+  }
+
+  function write(client, message) {
+    try {
+      client.res.write(message);
+      return true;
+    } catch {
+      remove(client);
+      return false;
+    }
+  }
+
+  return {
+    add(req, res) {
+      const client = { res, heartbeat: null };
+      clients.add(client);
+      write(client, ': connected\n\n');
+      client.heartbeat = setInterval(() => {
+        write(client, `: keep-alive ${new Date().toISOString()}\n\n`);
+      }, 25_000);
+      client.heartbeat.unref?.();
+
+      const cleanup = () => remove(client);
+      req.on('close', cleanup);
+      req.on('aborted', cleanup);
+      res.on('close', cleanup);
+      return client;
+    },
+    broadcast(type, payload = {}) {
+      const id = String(++nextId);
+      const data = JSON.stringify({
+        id,
+        type,
+        at: new Date().toISOString(),
+        ...payload
+      });
+      const message = `id: ${id}\nevent: printward\ndata: ${data}\n\n`;
+      for (const client of [...clients]) write(client, message);
+    },
+    count() {
+      return clients.size;
+    }
+  };
+}
+
 async function readBodyText(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -760,7 +812,7 @@ function scheduleOrdersCacheWarmup(storage, store, orderContext, config, cache, 
 }
 
 async function handleApi(req, res, requestUrl, context) {
-  const { config, storage, store, orderContext, ordersCache } = context;
+  const { config, storage, store, orderContext, ordersCache, eventHub } = context;
   const pathname = requestUrl.pathname;
 
   if (req.method === 'GET' && pathname === '/api/health') {
@@ -778,6 +830,22 @@ async function handleApi(req, res, requestUrl, context) {
       orderContext: await orderContext.health(),
       agentUrl: config.agent.defaultUrl
     });
+    return;
+  }
+
+  if (pathname === '/api/events') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { error: 'Method not allowed.' });
+      return;
+    }
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no'
+    });
+    eventHub.add(req, res);
     return;
   }
 
@@ -921,6 +989,11 @@ async function handleApi(req, res, requestUrl, context) {
       notes: body.notes || '',
       callbackToken: randomToken()
     });
+    eventHub.broadcast('print-job-created', {
+      jobId: job.id,
+      status: job.status,
+      orderNumbers: jobOrderNumbers(job)
+    });
 
     sendJson(res, 201, {
       job,
@@ -945,6 +1018,12 @@ async function handleApi(req, res, requestUrl, context) {
       orders: structuredClone(previousJob.orders || []),
       notes: `Retry of ${previousJob.id}`,
       callbackToken: randomToken()
+    });
+    eventHub.broadcast('print-job-retried', {
+      jobId: job.id,
+      previousJobId: previousJob.id,
+      status: job.status,
+      orderNumbers: jobOrderNumbers(job)
     });
 
     sendJson(res, 201, {
@@ -986,6 +1065,11 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
     invalidateOrdersCache(ordersCache);
+    eventHub.broadcast('print-job-completed', {
+      jobId: job.id,
+      status: job.status,
+      orderNumbers: jobOrderNumbers(job)
+    });
     sendJson(res, 200, { job });
     return;
   }
@@ -1060,6 +1144,7 @@ export function createRequestHandler(config = loadConfig()) {
   const orderContext = createOrderContextClient(config);
   const store = createStateStore(config);
   const ordersCache = createOrdersCache(config);
+  const eventHub = createEventHub();
 
   if (ordersCache.cacheMs > 0 && config.ordersCacheWarmup) {
     scheduleOrdersCacheWarmup(storage, store, orderContext, config, ordersCache, 1, {
@@ -1080,7 +1165,7 @@ export function createRequestHandler(config = loadConfig()) {
       }
 
       if (requestUrl.pathname.startsWith('/api/')) {
-        await handleApi(req, res, requestUrl, { config, storage, store, orderContext, ordersCache });
+        await handleApi(req, res, requestUrl, { config, storage, store, orderContext, ordersCache, eventHub });
         return;
       }
 

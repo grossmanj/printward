@@ -24,6 +24,8 @@ const state = {
   printJobs: [],
   printJobsLoading: false,
   printJobsError: '',
+  liveEvents: null,
+  liveUpdateTimer: null,
   activePrint: null,
   activeManualJob: null
 };
@@ -1006,6 +1008,39 @@ async function loadPrintJobs() {
   }
 }
 
+function scheduleLiveUpdate(eventType) {
+  if (state.activePrint) return;
+
+  window.clearTimeout(state.liveUpdateTimer);
+  state.liveUpdateTimer = window.setTimeout(async () => {
+    try {
+      await Promise.all([loadOrders({ live: true }), loadPrintJobs()]);
+      if (eventType === 'print-job-completed') toast('Print status updated');
+    } catch (error) {
+      console.warn('Live update refresh failed:', error);
+    }
+  }, 300);
+}
+
+function connectLiveEvents() {
+  if (!window.EventSource || state.liveEvents) return;
+
+  const source = new EventSource('/api/events');
+  state.liveEvents = source;
+  source.addEventListener('printward', (event) => {
+    let payload = {};
+    try {
+      payload = JSON.parse(event.data || '{}');
+    } catch {
+      payload = {};
+    }
+    scheduleLiveUpdate(payload.type || 'printward');
+  });
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) state.liveEvents = null;
+  };
+}
+
 async function checkAgent() {
   const agentUrl = state.defaults.agentUrl || elements.agentUrlInput.value || 'http://127.0.0.1:37951';
   const controller = new AbortController();
@@ -1534,6 +1569,7 @@ async function init() {
   await checkAgent();
   await loadOrders();
   await loadPrintJobs();
+  connectLiveEvents();
 }
 
 init().catch((error) => {

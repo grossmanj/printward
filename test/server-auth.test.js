@@ -82,6 +82,70 @@ async function request(handler, pathOrUrl, options = {}) {
   };
 }
 
+async function openEventStream(handler, pathOrUrl, options = {}) {
+  const url = new URL(pathOrUrl, 'http://127.0.0.1');
+  const req = new Readable({
+    read() {}
+  });
+  req.method = options.method || 'GET';
+  req.url = `${url.pathname}${url.search}`;
+  req.headers = {
+    host: url.host,
+    accept: 'text/event-stream',
+    ...(options.headers || {})
+  };
+
+  const headers = {};
+  const chunks = [];
+  const res = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(Buffer.from(chunk));
+      callback();
+    }
+  });
+  res.statusCode = 200;
+  res.writeHead = (statusCode, headerMap = {}) => {
+    res.statusCode = statusCode;
+    for (const [name, value] of Object.entries(headerMap)) {
+      headers[name.toLowerCase()] = value;
+    }
+    return res;
+  };
+  res.end = (chunk) => {
+    if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    return Writable.prototype.end.call(res);
+  };
+
+  await handler(req, res);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  return {
+    status: res.statusCode,
+    headers: {
+      get(name) {
+        const value = headers[String(name).toLowerCase()];
+        return Array.isArray(value) ? value.join(', ') : value || null;
+      }
+    },
+    text() {
+      return Buffer.concat(chunks).toString('utf8');
+    },
+    close() {
+      req.destroy();
+      res.destroy();
+    }
+  };
+}
+
+async function waitForText(stream, text, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (stream.text().includes(text)) return stream.text();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for event stream text: ${text}`);
+}
+
 test('auth blocks app/API until login succeeds', async (t) => {
   const handler = await createAuthHandler(t);
 
@@ -229,4 +293,57 @@ test('print job history lists jobs and can create exact retry packets', async (t
   assert.notEqual(retryPayload.job.id, created.job.id);
   assert.equal(retryPayload.job.orders[0].documents[0].generation, '1001001');
   assert.match(retryPayload.manifest.orders[0].documents[0].url, /generation=1001001/);
+});
+
+test('print job events stream broadcasts job changes', async (t) => {
+  const handler = await createAuthHandler(t);
+  const login = await request(handler, '/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  const cookie = login.headers.get('set-cookie');
+
+  const stream = await openEventStream(handler, '/api/events', {
+    headers: { cookie }
+  });
+  t.after(() => stream.close());
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+  assert.match(stream.text(), /connected/);
+
+  const createJob = await request(handler, '/api/print-jobs', {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      user: 'operator',
+      orderNumbers: ['1001'],
+      documentTypes: ['packingSlip']
+    })
+  });
+  assert.equal(createJob.status, 201);
+  const created = await createJob.json();
+
+  const createdText = await waitForText(stream, 'print-job-created');
+  assert.match(createdText, new RegExp(created.job.id));
+
+  const completeJob = await request(handler, `/api/print-jobs/${created.job.id}/complete`, {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      status: 'printed',
+      user: 'operator',
+      printerName: 'Office Printer'
+    })
+  });
+  assert.equal(completeJob.status, 200);
+
+  const completedText = await waitForText(stream, 'print-job-completed');
+  assert.match(completedText, new RegExp(created.job.id));
 });
