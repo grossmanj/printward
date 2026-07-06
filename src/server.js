@@ -299,6 +299,9 @@ function buildManifest(req, job) {
       ? `&copyMode=perPage&pageCopies=${encodeURIComponent(String(pageCopies))}`
       : '';
   };
+  const documentVersionParams = (document) => {
+    return document.generation ? `&generation=${encodeURIComponent(String(document.generation))}` : '';
+  };
   return {
     jobId: job.id,
     callbackUrl: `${origin}/api/print-jobs/${job.id}/complete${callbackToken}`,
@@ -306,18 +309,105 @@ function buildManifest(req, job) {
       ...order,
       documents: order.documents.map((document) => ({
         ...document,
-        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}${documentTransformParams(document)}`
+        url: `${origin}/api/documents?name=${encodeURIComponent(document.name)}&source=${encodeURIComponent(document.source || 'primary')}${documentTokenParams}${documentTransformParams(document)}${documentVersionParams(document)}`
       }))
     }))
   };
 }
 
-function jobIncludesDocument(job, name, source) {
+function jobIncludesDocument(job, name, source, generation = '') {
   return (job.orders || []).some((order) => {
     return (order.documents || []).some((document) => {
-      return document.name === name && (document.source || 'primary') === source;
+      return document.name === name
+        && (document.source || 'primary') === source
+        && (!generation || String(document.generation || '') === String(generation));
     });
   });
+}
+
+function jobOrderNumbers(job) {
+  return (job.orders || [])
+    .map((order) => String(order.orderNumber || '').trim())
+    .filter(Boolean);
+}
+
+function jobDocumentCount(job) {
+  return (job.orders || []).reduce((total, order) => total + (order.documents || []).length, 0);
+}
+
+function documentChanged(previous, current) {
+  if (!current) return true;
+  if (previous.name !== current.name) return true;
+  if ((previous.source || 'primary') !== (current.source || 'primary')) return true;
+  if (previous.generation && current.generation && String(previous.generation) !== String(current.generation)) return true;
+  if (!previous.generation || !current.generation) {
+    return Boolean(previous.updated && current.updated && String(previous.updated) !== String(current.updated));
+  }
+  return false;
+}
+
+function summarizeJobChanges(job, currentByOrderNumber) {
+  const details = [];
+
+  for (const order of job.orders || []) {
+    const currentOrder = currentByOrderNumber.get(String(order.orderNumber || ''));
+    for (const document of order.documents || []) {
+      const current = currentOrder?.documents?.[document.type];
+      if (!current) {
+        details.push({
+          orderNumber: order.orderNumber,
+          type: document.type,
+          typeLabel: document.typeLabel || document.type,
+          name: document.name,
+          reason: 'missing'
+        });
+        continue;
+      }
+
+      if (!documentChanged(document, current)) continue;
+      details.push({
+        orderNumber: order.orderNumber,
+        type: document.type,
+        typeLabel: document.typeLabel || document.type,
+        name: document.name,
+        currentName: current.name,
+        previousGeneration: document.generation || null,
+        currentGeneration: current.generation || null,
+        previousUpdated: document.updated || null,
+        currentUpdated: current.updated || null,
+        reason: 'changed'
+      });
+    }
+  }
+
+  return {
+    hasChanges: details.length > 0,
+    changedDocuments: details.filter((detail) => detail.reason === 'changed').length,
+    missingDocuments: details.filter((detail) => detail.reason === 'missing').length,
+    changedOrders: new Set(details.map((detail) => String(detail.orderNumber))).size,
+    details: details.slice(0, 12)
+  };
+}
+
+function summarizePrintJob(job, currentByOrderNumber = new Map()) {
+  const orderNumbers = jobOrderNumbers(job);
+  return {
+    id: job.id,
+    status: job.status || 'created',
+    createdAt: job.createdAt || '',
+    updatedAt: job.updatedAt || '',
+    completedAt: job.completedAt || '',
+    createdBy: job.createdBy || '',
+    completedBy: job.completedBy || '',
+    printerName: job.printerName || '',
+    options: job.options || {},
+    notes: job.notes || '',
+    error: job.error || '',
+    orderNumbers,
+    orderCount: orderNumbers.length,
+    documentCount: jobDocumentCount(job),
+    changes: summarizeJobChanges(job, currentByOrderNumber)
+  };
 }
 
 async function isAuthorizedDocumentRequest(req, requestUrl, config, store) {
@@ -327,13 +417,14 @@ async function isAuthorizedDocumentRequest(req, requestUrl, config, store) {
   const token = requestUrl.searchParams.get('token') || '';
   const name = requestUrl.searchParams.get('name') || '';
   const source = requestUrl.searchParams.get('source') || 'primary';
+  const generation = requestUrl.searchParams.get('generation') || '';
   const job = jobId ? await store.getJob(jobId) : null;
 
   return Boolean(
     job
     && job.callbackToken
     && safeEqual(token, job.callbackToken)
-    && jobIncludesDocument(job, name, source)
+    && jobIncludesDocument(job, name, source, generation)
   );
 }
 
@@ -749,6 +840,33 @@ async function handleApi(req, res, requestUrl, context) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/print-jobs') {
+    const limit = Math.max(1, Math.min(Number(requestUrl.searchParams.get('limit')) || 25, 100));
+    const jobs = await store.listJobs({ limit });
+    const orderNumbers = Array.from(new Set(jobs.flatMap(jobOrderNumbers)));
+    let currentByOrderNumber = new Map();
+    let contextStatus = { available: true };
+
+    if (orderNumbers.length > 0) {
+      try {
+        const current = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { orderNumbers });
+        currentByOrderNumber = new Map(current.orders.map((order) => [order.orderNumber, order]));
+        contextStatus = current.contextStatus || contextStatus;
+      } catch (error) {
+        contextStatus = {
+          available: false,
+          error: error.message
+        };
+      }
+    }
+
+    sendJson(res, 200, {
+      jobs: jobs.map((job) => summarizePrintJob(job, currentByOrderNumber)),
+      contextStatus
+    });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/print-jobs') {
     const body = await readJsonBody(req);
     const orderNumbers = Array.isArray(body.orderNumbers) ? body.orderNumbers.map(String) : [];
@@ -811,6 +929,32 @@ async function handleApi(req, res, requestUrl, context) {
     return;
   }
 
+  const retryMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/retry$/);
+  if (req.method === 'POST' && retryMatch) {
+    const body = await readJsonBody(req);
+    const previousJob = await store.getJob(retryMatch[1]);
+    if (!previousJob) {
+      sendJson(res, 404, { error: 'Print job not found.' });
+      return;
+    }
+
+    const job = await store.createJob({
+      createdBy: body.user || previousJob.createdBy,
+      printerName: body.printerName || previousJob.printerName || '',
+      options: body.options || previousJob.options || {},
+      orders: structuredClone(previousJob.orders || []),
+      notes: `Retry of ${previousJob.id}`,
+      callbackToken: randomToken()
+    });
+
+    sendJson(res, 201, {
+      job,
+      previousJob: summarizePrintJob(previousJob),
+      manifest: buildManifest(req, job)
+    });
+    return;
+  }
+
   const manifestMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/manifest$/);
   if (req.method === 'GET' && manifestMatch) {
     const job = await store.getJob(manifestMatch[1]);
@@ -849,6 +993,7 @@ async function handleApi(req, res, requestUrl, context) {
   if (req.method === 'GET' && pathname === '/api/documents') {
     const name = requestUrl.searchParams.get('name');
     const source = requestUrl.searchParams.get('source') || 'primary';
+    const generation = requestUrl.searchParams.get('generation') || '';
     if (!name) {
       sendJson(res, 400, { error: 'Document object name is required.' });
       return;
@@ -859,7 +1004,7 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
 
-    const object = await storage.getObject(name, source);
+    const object = await storage.getObject(name, source, generation);
     const pageCopies = requestUrl.searchParams.get('copyMode') === 'perPage'
       ? normalizedPageCopies(requestUrl.searchParams.get('pageCopies'))
       : 1;

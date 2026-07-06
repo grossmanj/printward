@@ -144,6 +144,15 @@ export class StateStore {
     return job ? structuredClone(job) : null;
   }
 
+  async listJobs(options = {}) {
+    await this.load();
+    const limit = Math.max(1, Math.min(Number(options.limit) || 25, 100));
+    return [...(this.state.jobs || [])]
+      .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))
+      .slice(0, limit)
+      .map((job) => structuredClone(job));
+  }
+
   async completeJob(jobId, input) {
     const now = new Date().toISOString();
     return this.update((state) => {
@@ -323,6 +332,20 @@ export class DatastoreStateStore {
 
   async getJob(jobId) {
     return this.getEntity(STORE_KINDS.job, jobId);
+  }
+
+  async listJobs(options = {}) {
+    const limit = Math.max(1, Math.min(Number(options.limit) || 25, 100));
+    const datastore = await this.getDatastore();
+    const query = datastore
+      .createQuery(this.kind(STORE_KINDS.job))
+      .order('createdAt', { descending: true })
+      .limit(limit);
+    const [entities] = await datastore.runQuery(query);
+    return (entities || [])
+      .map((entity) => parseStoredJson(entity.json, null))
+      .filter(Boolean)
+      .map((job) => structuredClone(job));
   }
 
   async completeJob(jobId, input) {

@@ -40,11 +40,16 @@ export class MockGcsClient {
     return JSON.parse(raw).map((object) => normalizeListedObject(object, object.source || 'primary'));
   }
 
-  async getObject(name, source = 'primary') {
+  async getObject(name, source = 'primary', generation = '') {
     const objects = await this.listObjects();
-    const object = objects.find((item) => item.name === name && item.source === source);
+    const object = objects.find((item) => {
+      return item.name === name
+        && item.source === source
+        && (!generation || String(item.generation || '') === String(generation));
+    });
     if (!object) {
-      const error = new Error(`Mock object not found: ${source}:${name}`);
+      const suffix = generation ? `#${generation}` : '';
+      const error = new Error(`Mock object not found: ${source}:${name}${suffix}`);
       error.statusCode = 404;
       throw error;
     }
@@ -155,11 +160,12 @@ export class GcsClient {
     return objects;
   }
 
-  async getObject(name) {
+  async getObject(name, _source = 'primary', generation = '') {
     const url = new URL(
       `${this.config.apiBase}/b/${encodeURIComponent(this.config.bucket)}/o/${encodeObjectName(name)}`
     );
     url.searchParams.set('alt', 'media');
+    if (generation) url.searchParams.set('generation', generation);
 
     const response = await this.request(url);
     const arrayBuffer = await response.arrayBuffer();
@@ -245,14 +251,14 @@ export class MultiGcsClient {
     return lists.flat();
   }
 
-  async getObject(name, source = 'primary') {
+  async getObject(name, source = 'primary', generation = '') {
     const client = this.clients.find((item) => item.source === source || item.sources?.some((entry) => entry.source === source));
     if (!client) {
       const error = new Error(`Storage source not configured: ${source}`);
       error.statusCode = 404;
       throw error;
     }
-    return client.getObject(name, source);
+    return client.getObject(name, source, generation);
   }
 
   async getObjectMetadata(name, source = 'primary') {

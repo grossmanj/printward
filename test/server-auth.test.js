@@ -155,3 +155,78 @@ test('job token allows local agent to fetch only documents in that print job', a
   const outsideJob = await request(handler, otherDocument.toString());
   assert.equal(outsideJob.status, 401);
 });
+
+test('print job history lists jobs and can create exact retry packets', async (t) => {
+  const handler = await createAuthHandler(t);
+  const login = await request(handler, '/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  const cookie = login.headers.get('set-cookie');
+
+  const createJob = await request(handler, '/api/print-jobs', {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      user: 'operator',
+      orderNumbers: ['1001'],
+      documentTypes: ['packingSlip'],
+      printerName: 'Office Printer',
+      options: {
+        printerName: 'Office Printer',
+        copies: 1,
+        staple: true
+      }
+    })
+  });
+  assert.equal(createJob.status, 201);
+
+  const created = await createJob.json();
+  assert.match(created.manifest.orders[0].documents[0].url, /generation=1001001/);
+
+  const completeJob = await request(handler, `/api/print-jobs/${created.job.id}/complete`, {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      status: 'printed',
+      user: 'operator',
+      printerName: 'Office Printer'
+    })
+  });
+  assert.equal(completeJob.status, 200);
+
+  const history = await request(handler, '/api/print-jobs?limit=5', {
+    headers: { cookie }
+  });
+  assert.equal(history.status, 200);
+  const historyPayload = await history.json();
+  assert.equal(historyPayload.jobs[0].id, created.job.id);
+  assert.equal(historyPayload.jobs[0].status, 'printed');
+  assert.deepEqual(historyPayload.jobs[0].orderNumbers, ['1001']);
+  assert.equal(historyPayload.jobs[0].documentCount, 1);
+  assert.equal(historyPayload.jobs[0].changes.hasChanges, false);
+
+  const retryJob = await request(handler, `/api/print-jobs/${created.job.id}/retry`, {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      user: 'operator',
+      printerName: 'Office Printer'
+    })
+  });
+  assert.equal(retryJob.status, 201);
+  const retryPayload = await retryJob.json();
+  assert.notEqual(retryPayload.job.id, created.job.id);
+  assert.equal(retryPayload.job.orders[0].documents[0].generation, '1001001');
+  assert.match(retryPayload.manifest.orders[0].documents[0].url, /generation=1001001/);
+});

@@ -21,6 +21,9 @@ const state = {
   ordersLoadingText: '',
   ordersLoadError: '',
   ordersRequestId: 0,
+  printJobs: [],
+  printJobsLoading: false,
+  printJobsError: '',
   activePrint: null,
   activeManualJob: null
 };
@@ -68,6 +71,9 @@ const elements = {
   readyDispatchCombos: document.querySelector('#readyDispatchCombos'),
   pendingDocuments: document.querySelector('#pendingDocuments'),
   printedOrders: document.querySelector('#printedOrders'),
+  jobHistoryStatus: document.querySelector('#jobHistoryStatus'),
+  jobHistoryList: document.querySelector('#jobHistoryList'),
+  refreshJobsButton: document.querySelector('#refreshJobsButton'),
   manualDialog: document.querySelector('#manualDialog'),
   closeManualButton: document.querySelector('#closeManualButton'),
   manualDocumentList: document.querySelector('#manualDocumentList'),
@@ -123,18 +129,21 @@ function printCountText(count) {
 function setActivePrint(activePrint) {
   state.activePrint = activePrint;
   renderOrders();
+  renderPrintJobs();
 }
 
 function updateActivePrintStage(stage) {
   if (!state.activePrint) return;
   state.activePrint = { ...state.activePrint, stage };
   renderOrders();
+  renderPrintJobs();
 }
 
 function clearActivePrint() {
   if (!state.activePrint) return;
   state.activePrint = null;
   renderOrders();
+  renderPrintJobs();
 }
 
 async function api(path, options = {}) {
@@ -224,6 +233,41 @@ function packetLabel(status) {
     missing: 'Missing docs',
     blocked: 'Packing left'
   }[status] || status;
+}
+
+function jobStatusLabel(status) {
+  return {
+    created: 'Created',
+    printed: 'Printed',
+    failed: 'Failed'
+  }[status] || status || 'Created';
+}
+
+function jobStatusClass(status) {
+  return {
+    created: 'pending',
+    printed: 'printed',
+    failed: 'missing'
+  }[status] || 'pending';
+}
+
+function jobSettingsText(job = {}) {
+  const options = job.options || {};
+  const parts = [];
+  if (job.printerName) parts.push(job.printerName);
+  if (options.copies) parts.push(`${options.copies} cop${Number(options.copies) === 1 ? 'y' : 'ies'}`);
+  if (options.duplex) parts.push('duplex');
+  if (options.staple) parts.push('staple');
+  return parts.join(' / ') || 'No printer recorded';
+}
+
+function jobChangeText(job = {}) {
+  const changes = job.changes || {};
+  if (!changes.hasChanges) return '';
+  const parts = [];
+  if (changes.changedDocuments) parts.push(`${changes.changedDocuments} changed`);
+  if (changes.missingDocuments) parts.push(`${changes.missingDocuments} missing`);
+  return `Documents changed since this job: ${parts.join(', ')}`;
 }
 
 function hasPackingLeft(order = {}) {
@@ -790,6 +834,75 @@ function renderOrders() {
   syncGroupCheckboxes();
 }
 
+function renderPrintJobs() {
+  if (!elements.jobHistoryList) return;
+
+  elements.refreshJobsButton.disabled = state.printJobsLoading;
+  elements.refreshJobsButton.textContent = state.printJobsLoading ? 'Loading...' : 'Refresh history';
+  elements.refreshJobsButton.classList.toggle('is-busy', state.printJobsLoading);
+
+  if (state.printJobsLoading) {
+    elements.jobHistoryStatus.textContent = 'Loading history';
+    elements.jobHistoryList.innerHTML = `
+      <div class="job-history-empty">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span>Loading recent print jobs</span>
+      </div>
+    `;
+    return;
+  }
+
+  if (state.printJobsError) {
+    elements.jobHistoryStatus.textContent = 'History unavailable';
+    elements.jobHistoryList.innerHTML = `<div class="job-history-empty error">Could not load print jobs: ${escapeHtml(state.printJobsError)}</div>`;
+    return;
+  }
+
+  elements.jobHistoryStatus.textContent = `${state.printJobs.length} recent job${state.printJobs.length === 1 ? '' : 's'}`;
+
+  if (state.printJobs.length === 0) {
+    elements.jobHistoryList.innerHTML = '<div class="job-history-empty">No print jobs yet</div>';
+    return;
+  }
+
+  elements.jobHistoryList.innerHTML = state.printJobs.map((job) => {
+    const orderNumbers = job.orderNumbers || [];
+    const isActiveRetry = state.activePrint?.type === 'job' && state.activePrint.jobId === job.id;
+    const statusClass = jobStatusClass(job.status);
+    const changeText = jobChangeText(job);
+    const createdBy = job.createdBy ? ` by ${job.createdBy}` : '';
+    const completedBy = job.completedBy ? ` / completed by ${job.completedBy}` : '';
+    const retryLabel = isActiveRetry ? printStageText(state.activePrint.stage) : 'Retry job';
+    const retryDisabled = state.activePrint || orderNumbers.length === 0 ? 'disabled' : '';
+    const retryBusyClass = isActiveRetry ? ' is-busy' : '';
+    const error = job.error ? `<small class="job-error">${escapeHtml(job.error)}</small>` : '';
+
+    return `
+      <article class="job-card job-status-${escapeHtml(statusClass)}">
+        <div class="job-main">
+          <div class="job-title-row">
+            <span class="packet-status status-${escapeHtml(statusClass)}">${escapeHtml(jobStatusLabel(job.status))}</span>
+            <strong>${escapeHtml(formatTime(job.createdAt))}</strong>
+            ${changeText ? '<span class="job-warning">Changed docs</span>' : ''}
+          </div>
+          <div class="job-orders">Orders ${escapeHtml(orderNumbers.join(', ') || 'none')}</div>
+          <div class="job-meta">
+            <span>${Number(job.orderCount || 0)} order${Number(job.orderCount || 0) === 1 ? '' : 's'}</span>
+            <span>${Number(job.documentCount || 0)} doc${Number(job.documentCount || 0) === 1 ? '' : 's'}</span>
+            <span>${escapeHtml(jobSettingsText(job))}</span>
+            <span>${escapeHtml(createdBy.trim() || 'No user')}${escapeHtml(completedBy)}</span>
+          </div>
+          ${changeText ? `<small class="job-change">${escapeHtml(changeText)}</small>` : ''}
+          ${error}
+        </div>
+        <div class="job-actions">
+          <button class="button secondary job-retry${retryBusyClass}" type="button" data-job-id="${escapeHtml(job.id)}" ${retryDisabled}>${escapeHtml(retryLabel)}</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
 async function loadHealth() {
   const health = await api('/api/health');
   elements.storageLabel.textContent = environmentLabel(health);
@@ -874,6 +987,22 @@ async function loadOrders(options = {}) {
     renderOrdersLoadingStatus();
     renderOrders();
     throw error;
+  }
+}
+
+async function loadPrintJobs() {
+  state.printJobsLoading = true;
+  state.printJobsError = '';
+  renderPrintJobs();
+
+  try {
+    const payload = await api('/api/print-jobs?limit=20');
+    state.printJobs = payload.jobs || [];
+  } catch (error) {
+    state.printJobsError = error.message || 'Unknown error';
+  } finally {
+    state.printJobsLoading = false;
+    renderPrintJobs();
   }
 }
 
@@ -1078,6 +1207,59 @@ function closeManualDialog() {
   state.activeManualJob = null;
 }
 
+async function retryPrintJob(jobId) {
+  const job = state.printJobs.find((item) => item.id === jobId);
+  if (!job || state.activePrint) return;
+
+  const changeText = jobChangeText(job);
+  if (changeText && !window.confirm(`${changeText}.\n\nRetry the stored job packet anyway?`)) return;
+
+  setActivePrint({
+    type: 'job',
+    jobId,
+    stage: 'preparing'
+  });
+  toast(`Preparing retry for ${printCountText(job.orderCount || job.orderNumbers?.length || 0)}`);
+
+  try {
+    const jobPayload = await api(`/api/print-jobs/${encodeURIComponent(jobId)}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({
+        user: state.user,
+        printerName: state.defaults.printerName,
+        options: state.defaults
+      })
+    });
+    await loadPrintJobs();
+
+    if (!state.agentOnline) {
+      showManualDialog(jobPayload);
+      clearActivePrint();
+      toast('Local print agent is offline');
+      return;
+    }
+
+    if (!state.agentCanPrint) {
+      showManualDialog(jobPayload);
+      clearActivePrint();
+      toast('Local print bridge is not installed');
+      return;
+    }
+
+    updateActivePrintStage('printing');
+    toast('Sending retry to local printer');
+    await sendToAgent(jobPayload);
+    updateActivePrintStage('refreshing');
+    await Promise.all([loadOrders(), loadPrintJobs()]);
+    toast('Print job retried');
+  } catch (error) {
+    console.error(error);
+    toast(error.message || 'Print job retry failed');
+  } finally {
+    clearActivePrint();
+  }
+}
+
 async function printOrders(orderNumbers, source = {}) {
   if (orderNumbers.length === 0) return;
   if (state.activePrint) return;
@@ -1093,6 +1275,7 @@ async function printOrders(orderNumbers, source = {}) {
 
   try {
     const jobPayload = await createPrintJob(orderNumbers);
+    await loadPrintJobs();
 
     if (!state.agentOnline) {
       showManualDialog(jobPayload);
@@ -1114,7 +1297,7 @@ async function printOrders(orderNumbers, source = {}) {
     updateActivePrintStage('refreshing');
     toast('Updating print status');
     state.selected.clear();
-    await loadOrders();
+    await Promise.all([loadOrders(), loadPrintJobs()]);
     toast('Print job completed');
   } catch (error) {
     console.error(error);
@@ -1136,7 +1319,7 @@ async function markPrinted(orderNumbers) {
     })
   });
   state.selected.clear();
-  await loadOrders();
+  await Promise.all([loadOrders(), loadPrintJobs()]);
   toast('Selected documents marked printed');
 }
 
@@ -1215,6 +1398,9 @@ function bindEvents() {
 
   elements.expandGroupsButton.addEventListener('click', expandAllGroups);
   elements.collapseGroupsButton.addEventListener('click', collapseAllGroups);
+  elements.refreshJobsButton.addEventListener('click', async () => {
+    await loadPrintJobs();
+  });
 
   elements.ordersBody.addEventListener('change', (event) => {
     if (event.target.matches('.group-checkbox')) {
@@ -1263,6 +1449,12 @@ function bindEvents() {
         orderNumber: button.dataset.order
       });
     }
+  });
+
+  elements.jobHistoryList.addEventListener('click', async (event) => {
+    const button = event.target.closest('.job-retry');
+    if (!button || button.disabled) return;
+    await retryPrintJob(button.dataset.jobId);
   });
 
   elements.selectAll.addEventListener('change', () => {
@@ -1330,7 +1522,7 @@ function bindEvents() {
     });
     closeManualDialog();
     state.selected.clear();
-    await loadOrders();
+    await Promise.all([loadOrders(), loadPrintJobs()]);
     toast('Manual print marked complete');
   });
 }
@@ -1341,6 +1533,7 @@ async function init() {
   await loadDefaults();
   await checkAgent();
   await loadOrders();
+  await loadPrintJobs();
 }
 
 init().catch((error) => {
