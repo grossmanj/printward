@@ -197,9 +197,21 @@ function dispatchLabel(context = {}) {
   return `${date} / ${time} / ${method}`;
 }
 
-function distributorKey(context = {}) {
+function normalizedDistributorName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function distributorNumberKey(context = {}) {
   const distributorNo = Number(context.distributorNo || 0);
   return distributorNo > 0 ? `external:${distributorNo}` : 'internal';
+}
+
+function distributorKey(context = {}) {
+  const distributorNo = Number(context.distributorNo || 0);
+  if (distributorNo <= 0) return 'internal';
+
+  const name = normalizedDistributorName(context.distributorName);
+  return name ? `external-name:${name}` : `external:${distributorNo}`;
 }
 
 function distributorLabel(context = {}) {
@@ -334,7 +346,11 @@ function distributorOptions(orders) {
 function renderDistributorFilter() {
   const options = distributorOptions(state.orders);
   const valid = new Set(options.map(([value]) => value));
-  if (!valid.has(state.distributor)) state.distributor = 'all';
+  if (!valid.has(state.distributor)) {
+    const legacyMatch = state.orders.find((order) => distributorNumberKey(order.context) === state.distributor);
+    state.distributor = legacyMatch ? distributorKey(legacyMatch.context) : 'all';
+    localStorage.setItem('printward:distributor', state.distributor);
+  }
 
   elements.distributorInput.innerHTML = options
     .map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`)
