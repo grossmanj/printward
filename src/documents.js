@@ -37,6 +37,10 @@ const FREIGHT_PRINT_COPY_RULES = new Map([
   ['db schenker finland international', 4]
 ]);
 
+const KYL_PALLET_SPLIT_DISTRIBUTORS = new Set([
+  'kyl- och frysexpressen mälardalen ab'
+]);
+
 const MATCHERS = [
   ['pallet', /^pallet([0-9A-Za-z_-]+)\.pdf$/i],
   ['packingSlip', /^order([0-9A-Za-z_-]+)\.pdf$/i],
@@ -143,13 +147,14 @@ function freightPageCopiesForOrder(order) {
   return FREIGHT_PRINT_COPY_RULES.get(normalizedDistributorName(order.context?.distributorName)) || 1;
 }
 
-function palletPageCopiesForOrder(order) {
-  return Math.min(100, Math.max(1, Math.trunc(Number(order.context?.freightPalletCopies || 0) || 1)));
-}
-
 function requiresPalletDocument(order) {
   if (order.context?.palletDocumentRequired) return true;
   return Boolean(order.documents?.pallet);
+}
+
+function usesKylPalletSplit(order) {
+  return KYL_PALLET_SPLIT_DISTRIBUTORS.has(normalizedDistributorName(order.context?.distributorName))
+    && Boolean(order.documents?.pallet);
 }
 
 function requiredTypesForOrder(order, requiredTypes = DOCUMENT_ORDER) {
@@ -379,7 +384,6 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
 export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
   const freightPageCopies = freightPageCopiesForOrder(order);
-  const palletPageCopies = palletPageCopiesForOrder(order);
   const palletDocumentCoversFreight = requiresPalletDocument(order);
   return {
     orderNumber: order.orderNumber,
@@ -400,9 +404,120 @@ export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
         updated: document.updated,
         generation: document.generation,
         contentType: document.contentType,
-        pageCopies: document.type === 'pallet' && palletPageCopies > 1
-          ? palletPageCopies
-          : (document.type === 'freight' && freightPageCopies > 1 ? freightPageCopies : undefined)
+        pageCopies: document.type === 'freight' && freightPageCopies > 1 ? freightPageCopies : undefined
       }))
   };
+}
+
+function sectionFileName(document, suffix) {
+  const fileName = document.fileName || basename(document.name);
+  return fileName.replace(/\.pdf$/i, `-${suffix}.pdf`);
+}
+
+function documentForPrintSection(document, overrides = {}) {
+  return {
+    name: document.name,
+    source: document.source || 'primary',
+    fileName: overrides.fileName || document.fileName,
+    type: document.type,
+    typeLabel: overrides.typeLabel || document.typeLabel,
+    orderNumber: document.orderNumber,
+    size: document.size,
+    updated: document.updated,
+    generation: document.generation,
+    contentType: document.contentType,
+    ...overrides
+  };
+}
+
+function printSectionSnapshot(order, sectionType, sectionLabel, documents) {
+  return {
+    orderNumber: order.orderNumber,
+    isPrintSection: true,
+    sectionType,
+    sectionLabel,
+    missingTypes: [],
+    documents
+  };
+}
+
+function hasValue(value) {
+  return String(value || '').trim().length > 0;
+}
+
+function kylPalletPageCount(order) {
+  return Math.max(1, Math.min(100, Math.trunc(Number(order.context?.freightPalletCopies || 0) || 1)));
+}
+
+function kylFreightSectionDocument(order, section, label) {
+  const pallet = order.documents.pallet;
+  const context = order.context || {};
+  return documentForPrintSection(pallet, {
+    typeLabel: label,
+    fileName: sectionFileName(pallet, section),
+    kylSection: {
+      section,
+      labelPages: kylPalletPageCount(order),
+      hasCooling: hasValue(context.freightConsignmentFresh),
+      hasFrozen: hasValue(context.freightConsignmentFrozen)
+    }
+  });
+}
+
+function kylPalletPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
+  const selected = new Set(selectedTypes);
+  const snapshots = [];
+  const pallet = order.documents.pallet;
+  if (!selected.has('pallet') || !pallet) return [orderToPrintSnapshot(order, selectedTypes)];
+
+  const labelPages = kylPalletPageCount(order);
+  for (let page = 1; page <= labelPages; page += 1) {
+    snapshots.push(printSectionSnapshot(order, `pallet-label-${page}`, `Pallet page ${page}`, [
+      documentForPrintSection(pallet, {
+        typeLabel: `Pallet page ${page}`,
+        fileName: sectionFileName(pallet, `pallet-${page}`),
+        pages: String(page)
+      })
+    ]));
+  }
+
+  const context = order.context || {};
+  const hasCooling = hasValue(context.freightConsignmentFresh);
+  const hasFrozen = hasValue(context.freightConsignmentFrozen);
+
+  if (hasFrozen) {
+    snapshots.push(printSectionSnapshot(order, 'frozen-freight', 'Frozen freight', [
+      kylFreightSectionDocument(order, 'frozenFreight', 'Frozen freight')
+    ]));
+  }
+
+  if (hasCooling) {
+    snapshots.push(printSectionSnapshot(order, 'cooling-freight', 'Cooling freight', [
+      kylFreightSectionDocument(order, 'coolingFreight', 'Cooling freight')
+    ]));
+  }
+
+  if (!hasFrozen && !hasCooling) {
+    snapshots.push(printSectionSnapshot(order, 'freight', 'Freight', [
+      kylFreightSectionDocument(order, 'remainingFreight', 'Freight')
+    ]));
+  }
+
+  const slipAttachment = ['packingSlip', 'attachment']
+    .filter((type) => selected.has(type))
+    .map((type) => order.documents[type])
+    .filter(Boolean)
+    .map((document) => documentForPrintSection(document));
+
+  if (slipAttachment.length > 0) {
+    snapshots.push(printSectionSnapshot(order, 'slip-attachment', 'Slip and attachment', slipAttachment));
+  }
+
+  return snapshots.filter((snapshot) => snapshot.documents.length > 0);
+}
+
+export function orderToPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
+  if (usesKylPalletSplit(order)) return kylPalletPrintSnapshots(order, selectedTypes);
+  const snapshot = orderToPrintSnapshot(order, selectedTypes);
+  return snapshot.documents.length > 0 ? [snapshot] : [];
 }

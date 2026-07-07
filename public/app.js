@@ -1234,7 +1234,7 @@ function showManualDialog(jobPayload) {
     }).join('');
     const label = order.isSeparator
       ? `Combo separator ${order.separatorLabel || ''}`.trim()
-      : `Order ${order.orderNumber}`;
+      : `Order ${order.orderNumber}${order.sectionLabel ? ` - ${order.sectionLabel}` : ''}`;
     return `<div class="manual-order"><strong>${escapeHtml(label)}</strong>${links}</div>`;
   }).join('');
   elements.manualDialog.hidden = false;

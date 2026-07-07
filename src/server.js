@@ -6,14 +6,14 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
-import { createCenteredTextPdf, repeatPdfPages } from './pdf.js';
+import { createCenteredTextPdf, extractKylFreightSection, extractPdfPages, repeatPdfPages } from './pdf.js';
 import {
   DOCUMENT_ORDER,
   DOCUMENT_TYPES,
   applyDocumentRequirements,
   buildOrders,
   filterOrders,
-  orderToPrintSnapshot,
+  orderToPrintSnapshots,
   summarizeDispatchCombos,
   summarizeOrders
 } from './documents.js';
@@ -346,10 +346,24 @@ function buildManifest(req, job) {
     ? `&jobId=${encodeURIComponent(job.id)}&token=${encodeURIComponent(job.callbackToken)}`
     : '';
   const documentTransformParams = (document) => {
+    const params = [];
+    if (document.pages) {
+      params.push(`pages=${encodeURIComponent(String(document.pages))}`);
+    }
+    if (document.kylSection) {
+      params.push(`kylSection=${encodeURIComponent(String(document.kylSection.section || ''))}`);
+      params.push(`labelPages=${encodeURIComponent(String(document.kylSection.labelPages || 0))}`);
+      params.push(`hasCooling=${document.kylSection.hasCooling ? '1' : '0'}`);
+      params.push(`hasFrozen=${document.kylSection.hasFrozen ? '1' : '0'}`);
+    }
+
     const pageCopies = normalizedPageCopies(document.pageCopies);
-    return pageCopies > 1
-      ? `&copyMode=perPage&pageCopies=${encodeURIComponent(String(pageCopies))}`
-      : '';
+    if (pageCopies > 1) {
+      params.push('copyMode=perPage');
+      params.push(`pageCopies=${encodeURIComponent(String(pageCopies))}`);
+    }
+
+    return params.length > 0 ? `&${params.join('&')}` : '';
   };
   const documentVersionParams = (document) => {
     return document.generation ? `&generation=${encodeURIComponent(String(document.generation))}` : '';
@@ -386,10 +400,10 @@ function isGeneratedDocument(document) {
 }
 
 function jobOrderNumbers(job) {
-  return (job.orders || [])
+  return Array.from(new Set((job.orders || [])
     .filter((order) => !isSeparatorOrder(order))
     .map((order) => String(order.orderNumber || '').trim())
-    .filter(Boolean);
+    .filter(Boolean)));
 }
 
 function jobDocumentCount(job) {
@@ -528,7 +542,7 @@ function buildPrintSnapshots(orders, selectedTypes, options = {}) {
   const printableOrders = orders.filter(Boolean);
   if (!options.includeComboSeparators) {
     return printableOrders
-      .map((order) => orderToPrintSnapshot(order, selectedTypes))
+      .flatMap((order) => orderToPrintSnapshots(order, selectedTypes))
       .filter((order) => order.documents.length > 0);
   }
 
@@ -550,7 +564,7 @@ function buildPrintSnapshots(orders, selectedTypes, options = {}) {
   const snapshots = [];
   groups.forEach((group, index) => {
     const orderSnapshots = group.orders
-      .map((order) => orderToPrintSnapshot(order, selectedTypes))
+      .flatMap((order) => orderToPrintSnapshots(order, selectedTypes))
       .filter((order) => order.documents.length > 0);
     if (orderSnapshots.length === 0) return;
     snapshots.push(createComboSeparatorSnapshot(group.separatorOrder, index + 1));
@@ -1242,12 +1256,34 @@ async function handleApi(req, res, requestUrl, context) {
     }
 
     const object = await storage.getObject(name, source, generation);
+    const pages = requestUrl.searchParams.get('pages') || '';
+    const kylSection = requestUrl.searchParams.get('kylSection') || '';
     const pageCopies = requestUrl.searchParams.get('copyMode') === 'perPage'
       ? normalizedPageCopies(requestUrl.searchParams.get('pageCopies'))
       : 1;
-    const body = pageCopies > 1 ? await repeatPdfPages(object.body, pageCopies) : object.body;
+    let body = object.body;
+    let transformed = false;
+
+    if (kylSection) {
+      body = await extractKylFreightSection(body, {
+        section: kylSection,
+        labelPages: requestUrl.searchParams.get('labelPages') || 0,
+        hasCooling: requestUrl.searchParams.get('hasCooling') || '',
+        hasFrozen: requestUrl.searchParams.get('hasFrozen') || ''
+      });
+      transformed = true;
+    } else if (pages) {
+      body = await extractPdfPages(body, pages);
+      transformed = true;
+    }
+
+    if (pageCopies > 1) {
+      body = await repeatPdfPages(body, pageCopies);
+      transformed = true;
+    }
+
     res.writeHead(200, {
-      'content-type': pageCopies > 1 ? 'application/pdf' : (object.contentType || 'application/pdf'),
+      'content-type': transformed ? 'application/pdf' : (object.contentType || 'application/pdf'),
       'content-length': body.length,
       'content-disposition': `inline; filename="${path.basename(name).replaceAll('"', '')}"`,
       'cache-control': 'private, max-age=30'

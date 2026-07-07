@@ -148,9 +148,11 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
   const packingLinesLeft = normalizedPackingDepartments.reduce((sum, department) => sum + department.linesLeft, 0);
   const packingQuantityLeft = normalizedPackingDepartments.reduce((sum, department) => sum + department.quantityLeft, 0);
   const totalQuantity = Number(row.totalQuantity ?? topLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0));
+  const freightConsignmentFresh = String(row.freightConsignmentFresh ?? row.FreightConsignmentFresh ?? '').trim();
+  const freightConsignmentFrozen = String(row.freightConsignmentFrozen ?? row.FreightConsignmentFrozen ?? '').trim();
   const freightConsignmentNumbers = uniqueNonEmpty([
-    row.freightConsignmentFresh ?? row.FreightConsignmentFresh,
-    row.freightConsignmentFrozen ?? row.FreightConsignmentFrozen
+    freightConsignmentFresh,
+    freightConsignmentFrozen
   ]);
   const distributorNo = Number(row.distributorNo ?? row.SupNo ?? 0) || 0;
   const distributorName = String(row.distributorName ?? row.DistributorName ?? '').trim();
@@ -194,6 +196,8 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
     packerName,
     freightRequired,
     freightStatus: Number(row.freightStatus ?? row.FreightStatus ?? 0) || null,
+    freightConsignmentFresh,
+    freightConsignmentFrozen,
     freightConsignmentNumbers,
     freightPalletCopies,
     palletDocumentRequired,
@@ -677,6 +681,8 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       packerName: '',
       freightRequired: false,
       freightStatus: null,
+      freightConsignmentFresh: '',
+      freightConsignmentFrozen: '',
       freightConsignmentNumbers: [],
       freightPalletCopies: 0,
       palletDocumentRequired: false,

@@ -111,3 +111,106 @@ export async function repeatPdfPages(body, copies) {
 
   return Buffer.from(await repeated.save());
 }
+
+function parsePageSelection(selection, pageCount) {
+  const indices = [];
+  const seen = new Set();
+  const parts = String(selection || '').split(',').map((part) => part.trim()).filter(Boolean);
+
+  for (const part of parts) {
+    const range = part.match(/^(\d+)-(\d+)$/);
+    const single = part.match(/^(\d+)$/);
+    if (!range && !single) {
+      throw new Error(`Invalid PDF page selection: ${selection}`);
+    }
+
+    const start = Number(range ? range[1] : single[1]);
+    const end = Number(range ? range[2] : single[1]);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > pageCount) {
+      throw new Error(`PDF page selection ${part} is outside the ${pageCount} page document.`);
+    }
+
+    for (let page = start; page <= end; page += 1) {
+      const index = page - 1;
+      if (!seen.has(index)) {
+        seen.add(index);
+        indices.push(index);
+      }
+    }
+  }
+
+  if (indices.length === 0) throw new Error('No PDF pages selected.');
+  return indices;
+}
+
+async function extractPdfPageIndices(body, indices) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(sourceBody);
+  const pageCount = source.getPageCount();
+
+  for (const index of indices) {
+    if (!Number.isInteger(index) || index < 0 || index >= pageCount) {
+      throw new Error(`PDF page index ${index + 1} is outside the ${pageCount} page document.`);
+    }
+  }
+
+  const extracted = await PDFDocument.create();
+  const pages = await extracted.copyPages(source, indices);
+  for (const page of pages) extracted.addPage(page);
+  return Buffer.from(await extracted.save());
+}
+
+export async function extractPdfPages(body, selection) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(sourceBody);
+  const indices = parsePageSelection(selection, source.getPageCount());
+  return extractPdfPageIndices(sourceBody, indices);
+}
+
+function boolFromQuery(value) {
+  return ['1', 'true', 'yes'].includes(String(value || '').toLowerCase());
+}
+
+export async function extractKylFreightSection(body, options = {}) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(sourceBody);
+  const pageCount = source.getPageCount();
+  const labelPages = Math.max(0, Math.min(pageCount, Math.trunc(Number(options.labelPages || 0)) || 0));
+  const section = String(options.section || '').trim();
+  const hasCooling = boolFromQuery(options.hasCooling);
+  const hasFrozen = boolFromQuery(options.hasFrozen);
+  const freightIndices = Array.from(
+    { length: Math.max(0, pageCount - labelPages) },
+    (_, index) => labelPages + index
+  );
+
+  let indices = [];
+  if (section === 'coolingFreight' || section === 'frozenFreight') {
+    if (hasCooling && hasFrozen) {
+      if (freightIndices.length % 2 !== 0) {
+        throw new Error(`Cannot split Kyl freight pages: ${freightIndices.length} freight pages after ${labelPages} pallet pages.`);
+      }
+      const half = freightIndices.length / 2;
+      indices = section === 'coolingFreight'
+        ? freightIndices.slice(0, half)
+        : freightIndices.slice(half);
+    } else if (section === 'coolingFreight' && hasCooling) {
+      indices = freightIndices;
+    } else if (section === 'frozenFreight' && hasFrozen) {
+      indices = freightIndices;
+    }
+  } else if (section === 'remainingFreight') {
+    indices = freightIndices;
+  } else {
+    throw new Error(`Unknown Kyl freight section: ${section || 'none'}`);
+  }
+
+  if (indices.length === 0) {
+    throw new Error(`No pages found for Kyl freight section ${section}.`);
+  }
+
+  return extractPdfPageIndices(sourceBody, indices);
+}

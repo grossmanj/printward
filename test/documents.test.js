@@ -7,6 +7,7 @@ import {
   classifyObject,
   filterOrders,
   orderToPrintSnapshot,
+  orderToPrintSnapshots,
   summarizeDispatchCombos,
   summarizeOrders
 } from '../src/documents.js';
@@ -192,7 +193,58 @@ test('requires pallet documents for Kyl och Frysexpressen orders with reported p
 
   const snapshot = orderToPrintSnapshot(byOrder.get('1002'), ['pallet', 'packingSlip', 'attachment', 'freight']);
   assert.deepEqual(snapshot.documents.map((document) => document.type), ['pallet', 'packingSlip', 'attachment']);
-  assert.equal(snapshot.documents[0].pageCopies, 2);
+  assert.equal(snapshot.documents[0].pageCopies, undefined);
+});
+
+test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
+    { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' },
+    { name: 'pallet1001.pdf', updated: '2026-06-24T08:02:00.000Z', generation: '3' }
+  ]), new Map([
+    ['1001', {
+      distributorNo: 123,
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      freightRequired: true,
+      freightConsignmentFresh: 'COOL123',
+      freightConsignmentFrozen: 'FROZ456',
+      freightConsignmentNumbers: ['COOL123', 'FROZ456'],
+      freightPalletCopies: 2,
+      palletDocumentRequired: true
+    }]
+  ]));
+
+  const required = applyDocumentRequirements(orders, ['pallet', 'packingSlip', 'attachment', 'freight']);
+  const snapshots = orderToPrintSnapshots(required[0], ['pallet', 'packingSlip', 'attachment', 'freight']);
+
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
+    'pallet-label-1',
+    'pallet-label-2',
+    'frozen-freight',
+    'cooling-freight',
+    'slip-attachment'
+  ]);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.type)), [
+    ['pallet'],
+    ['pallet'],
+    ['pallet'],
+    ['pallet'],
+    ['packingSlip', 'attachment']
+  ]);
+  assert.equal(snapshots[0].documents[0].pages, '1');
+  assert.equal(snapshots[1].documents[0].pages, '2');
+  assert.deepEqual(snapshots[2].documents[0].kylSection, {
+    section: 'frozenFreight',
+    labelPages: 2,
+    hasCooling: true,
+    hasFrozen: true
+  });
+  assert.deepEqual(snapshots[3].documents[0].kylSection, {
+    section: 'coolingFreight',
+    labelPages: 2,
+    hasCooling: true,
+    hasFrozen: true
+  });
 });
 
 test('requires visible freight documents even without freight context', () => {
