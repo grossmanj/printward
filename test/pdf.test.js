@@ -6,6 +6,7 @@ import {
   createCenteredTextPdf,
   extractKylFreightSection,
   extractPdfPages,
+  inferKylPalletLabelPages,
   repeatPdfPages
 } from '../src/pdf.js';
 
@@ -84,4 +85,31 @@ test('extracts Kyl frozen and cooling freight sections after pallet pages', asyn
 
   assert.deepEqual(frozen.getPages().map((page) => page.getWidth()), [300, 310, 320]);
   assert.deepEqual(cooling.getPages().map((page) => page.getWidth()), [200, 210, 220]);
+});
+
+test('infers Kyl label pages when requested label count is wrong', async () => {
+  const source = await PDFDocument.create();
+  source.addPage([100, 100]);
+  source.addPage([110, 110]);
+  source.addPage([200, 200]);
+  source.addPage([210, 210]);
+  source.addPage([220, 220]);
+  source.addPage([300, 300]);
+  source.addPage([310, 310]);
+  source.addPage([320, 320]);
+  const body = await source.save();
+
+  assert.equal(await inferKylPalletLabelPages(body, {
+    hasCooling: true,
+    hasFrozen: true
+  }), 2);
+
+  const frozen = await PDFDocument.load(await extractKylFreightSection(body, {
+    section: 'frozenFreight',
+    labelPages: 1,
+    hasCooling: true,
+    hasFrozen: true
+  }));
+
+  assert.deepEqual(frozen.getPages().map((page) => page.getWidth()), [300, 310, 320]);
 });

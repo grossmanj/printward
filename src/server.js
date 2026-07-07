@@ -6,7 +6,13 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
-import { createCenteredTextPdf, extractKylFreightSection, extractPdfPages, repeatPdfPages } from './pdf.js';
+import {
+  createCenteredTextPdf,
+  extractKylFreightSection,
+  extractPdfPages,
+  inferKylPalletLabelPages,
+  repeatPdfPages
+} from './pdf.js';
 import {
   DOCUMENT_ORDER,
   DOCUMENT_TYPES,
@@ -499,6 +505,42 @@ function comboKey(order = {}) {
   ].join('|');
 }
 
+function hasText(value) {
+  return String(value || '').trim().length > 0;
+}
+
+function isKylPalletSplitOrder(order = {}) {
+  return String(order.context?.distributorName || '').trim().toLowerCase() === 'kyl- och frysexpressen mälardalen ab'
+    && Boolean(order.documents?.pallet);
+}
+
+async function annotateKylPalletLabelPages(storage, orders) {
+  await mapWithConcurrency(orders.filter(isKylPalletSplitOrder), 6, async (order) => {
+    const pallet = order.documents.pallet;
+    const context = order.context || {};
+    try {
+      const object = await storage.getObject(pallet.name, pallet.source || 'freight', pallet.generation || '');
+      const labelPages = await inferKylPalletLabelPages(object.body, {
+        hasCooling: hasText(context.freightConsignmentFresh),
+        hasFrozen: hasText(context.freightConsignmentFrozen)
+      });
+      order.context = {
+        ...context,
+        kylPalletLabelPages: labelPages
+      };
+    } catch (error) {
+      console.warn(`Unable to inspect Kyl pallet PDF for order ${order.orderNumber}: ${error.message}`);
+      order.context = {
+        ...context,
+        kylPalletLabelPages: [
+          context.freightConsignmentFresh,
+          context.freightConsignmentFrozen
+        ].filter(hasText).length || 1
+      };
+    }
+  });
+}
+
 function comboSeparatorText(order = {}) {
   const context = order.context || {};
   return context.deliveryMethodName || (context.deliveryMethod ? `Method ${context.deliveryMethod}` : 'No delivery method');
@@ -538,8 +580,10 @@ function createComboSeparatorSnapshot(order, index) {
   };
 }
 
-function buildPrintSnapshots(orders, selectedTypes, options = {}) {
+async function buildPrintSnapshots(storage, orders, selectedTypes, options = {}) {
   const printableOrders = orders.filter(Boolean);
+  await annotateKylPalletLabelPages(storage, printableOrders);
+
   if (!options.includeComboSeparators) {
     return printableOrders
       .flatMap((order) => orderToPrintSnapshots(order, selectedTypes))
@@ -1112,7 +1156,7 @@ async function handleApi(req, res, requestUrl, context) {
       .map((orderNumber) => byOrderNumber.get(orderNumber))
       .filter(Boolean);
     const printTypes = includeRequiredDocumentTypes(selectedTypes, selectedOrders);
-    const snapshots = buildPrintSnapshots(selectedOrders, printTypes, {
+    const snapshots = await buildPrintSnapshots(storage, selectedOrders, printTypes, {
       includeComboSeparators: body.includeComboSeparators === true
     });
 

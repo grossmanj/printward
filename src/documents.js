@@ -446,7 +446,16 @@ function hasValue(value) {
 }
 
 function kylPalletPageCount(order) {
-  return Math.max(1, Math.min(100, Math.trunc(Number(order.context?.freightPalletCopies || 0) || 1)));
+  const context = order.context || {};
+  const inferred = Math.trunc(Number(context.kylPalletLabelPages || 0)) || 0;
+  if (inferred > 0) return Math.max(1, Math.min(100, inferred));
+
+  const consignmentCount = [
+    context.freightConsignmentFresh,
+    context.freightConsignmentFrozen
+  ].filter(hasValue).length || (Array.isArray(context.freightConsignmentNumbers) ? context.freightConsignmentNumbers.length : 0);
+
+  return Math.max(1, Math.min(100, consignmentCount || 1));
 }
 
 function kylFreightSectionDocument(order, section, label) {

@@ -209,7 +209,7 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
       freightConsignmentFresh: 'COOL123',
       freightConsignmentFrozen: 'FROZ456',
       freightConsignmentNumbers: ['COOL123', 'FROZ456'],
-      freightPalletCopies: 2,
+      freightPalletCopies: 1,
       palletDocumentRequired: true
     }]
   ]));

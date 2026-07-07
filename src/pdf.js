@@ -173,15 +173,46 @@ function boolFromQuery(value) {
   return ['1', 'true', 'yes'].includes(String(value || '').toLowerCase());
 }
 
+function kylConsignmentCount(hasCooling, hasFrozen) {
+  return [hasCooling, hasFrozen].filter(Boolean).length;
+}
+
+function inferredKylLabelPages(pageCount, hasCooling, hasFrozen) {
+  const consignmentCount = kylConsignmentCount(hasCooling, hasFrozen);
+  if (consignmentCount <= 0) return 1;
+
+  const inferred = pageCount - (consignmentCount * 3);
+  if (Number.isInteger(inferred) && inferred >= consignmentCount && inferred < pageCount) {
+    return inferred;
+  }
+
+  return consignmentCount;
+}
+
+export async function countPdfPages(body) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const { PDFDocument } = await import('pdf-lib');
+  const source = await PDFDocument.load(sourceBody);
+  return source.getPageCount();
+}
+
+export async function inferKylPalletLabelPages(body, options = {}) {
+  const hasCooling = boolFromQuery(options.hasCooling);
+  const hasFrozen = boolFromQuery(options.hasFrozen);
+  const pageCount = await countPdfPages(body);
+  return inferredKylLabelPages(pageCount, hasCooling, hasFrozen);
+}
+
 export async function extractKylFreightSection(body, options = {}) {
   const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
   const { PDFDocument } = await import('pdf-lib');
   const source = await PDFDocument.load(sourceBody);
   const pageCount = source.getPageCount();
-  const labelPages = Math.max(0, Math.min(pageCount, Math.trunc(Number(options.labelPages || 0)) || 0));
   const section = String(options.section || '').trim();
   const hasCooling = boolFromQuery(options.hasCooling);
   const hasFrozen = boolFromQuery(options.hasFrozen);
+  const requestedLabelPages = Math.max(0, Math.min(pageCount, Math.trunc(Number(options.labelPages || 0)) || 0));
+  const labelPages = inferredKylLabelPages(pageCount, hasCooling, hasFrozen) || requestedLabelPages;
   const freightIndices = Array.from(
     { length: Math.max(0, pageCount - labelPages) },
     (_, index) => labelPages + index
