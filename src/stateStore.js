@@ -167,7 +167,9 @@ export class StateStore {
 
       if (job.status === 'printed') {
         for (const order of job.orders) {
+          if (order.isSeparator) continue;
           for (const document of order.documents || []) {
+            if ((document.source || '') === 'generated' || document.type === 'comboSeparator') continue;
             state.printEvents.push({
               id: randomUUID(),
               jobId: job.id,
@@ -371,7 +373,9 @@ export class DatastoreStateStore {
       if (job.status === 'printed') {
         const writes = [];
         for (const order of job.orders) {
+          if (order.isSeparator) continue;
           for (const document of order.documents || []) {
+            if ((document.source || '') === 'generated' || document.type === 'comboSeparator') continue;
             const event = {
               id: randomUUID(),
               jobId: job.id,

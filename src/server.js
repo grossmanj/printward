@@ -6,7 +6,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
-import { repeatPdfPages } from './pdf.js';
+import { createCenteredTextPdf, repeatPdfPages } from './pdf.js';
 import {
   DOCUMENT_ORDER,
   DOCUMENT_TYPES,
@@ -377,14 +377,26 @@ function jobIncludesDocument(job, name, source, generation = '') {
   });
 }
 
+function isSeparatorOrder(order) {
+  return Boolean(order?.isSeparator);
+}
+
+function isGeneratedDocument(document) {
+  return (document?.source || '') === 'generated' || document?.type === 'comboSeparator';
+}
+
 function jobOrderNumbers(job) {
   return (job.orders || [])
+    .filter((order) => !isSeparatorOrder(order))
     .map((order) => String(order.orderNumber || '').trim())
     .filter(Boolean);
 }
 
 function jobDocumentCount(job) {
-  return (job.orders || []).reduce((total, order) => total + (order.documents || []).length, 0);
+  return (job.orders || []).reduce((total, order) => {
+    if (isSeparatorOrder(order)) return total;
+    return total + (order.documents || []).filter((document) => !isGeneratedDocument(document)).length;
+  }, 0);
 }
 
 function documentChanged(previous, current) {
@@ -402,8 +414,10 @@ function summarizeJobChanges(job, currentByOrderNumber) {
   const details = [];
 
   for (const order of job.orders || []) {
+    if (isSeparatorOrder(order)) continue;
     const currentOrder = currentByOrderNumber.get(String(order.orderNumber || ''));
     for (const document of order.documents || []) {
+      if (isGeneratedDocument(document)) continue;
       const current = currentOrder?.documents?.[document.type];
       if (!current) {
         details.push({
@@ -460,6 +474,99 @@ function summarizePrintJob(job, currentByOrderNumber = new Map()) {
     documentCount: jobDocumentCount(job),
     changes: summarizeJobChanges(job, currentByOrderNumber)
   };
+}
+
+function comboKey(order = {}) {
+  const context = order.context || {};
+  return [
+    context.deliveryDate || '',
+    context.dispatchTime || '',
+    context.deliveryMethodName || context.deliveryMethod || ''
+  ].join('|');
+}
+
+function comboSeparatorText(order = {}) {
+  const context = order.context || {};
+  return context.deliveryMethodName || (context.deliveryMethod ? `Method ${context.deliveryMethod}` : 'No delivery method');
+}
+
+function safeGeneratedName(value) {
+  return String(value || 'combo')
+    .trim()
+    .replace(/[^0-9A-Za-z._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'combo';
+}
+
+function createComboSeparatorSnapshot(order, index) {
+  const text = comboSeparatorText(order);
+  const orderNumber = `combo-separator-${index}`;
+  return {
+    orderNumber,
+    isSeparator: true,
+    separatorLabel: text,
+    missingTypes: [],
+    documents: [
+      {
+        name: `generated/combo-separator-${index}-${safeGeneratedName(text)}.pdf`,
+        source: 'generated',
+        fileName: `combo-${safeGeneratedName(text)}.pdf`,
+        type: 'comboSeparator',
+        typeLabel: 'Combo separator',
+        orderNumber,
+        contentType: 'application/pdf',
+        generated: {
+          kind: 'comboSeparator',
+          text
+        }
+      }
+    ]
+  };
+}
+
+function buildPrintSnapshots(orders, selectedTypes, options = {}) {
+  const printableOrders = orders.filter(Boolean);
+  if (!options.includeComboSeparators) {
+    return printableOrders
+      .map((order) => orderToPrintSnapshot(order, selectedTypes))
+      .filter((order) => order.documents.length > 0);
+  }
+
+  const groups = [];
+  const byKey = new Map();
+  for (const order of printableOrders) {
+    const key = comboKey(order);
+    if (!byKey.has(key)) {
+      const group = {
+        separatorOrder: order,
+        orders: []
+      };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    byKey.get(key).orders.push(order);
+  }
+
+  const snapshots = [];
+  groups.forEach((group, index) => {
+    const orderSnapshots = group.orders
+      .map((order) => orderToPrintSnapshot(order, selectedTypes))
+      .filter((order) => order.documents.length > 0);
+    if (orderSnapshots.length === 0) return;
+    snapshots.push(createComboSeparatorSnapshot(group.separatorOrder, index + 1));
+    snapshots.push(...orderSnapshots);
+  });
+
+  return snapshots;
+}
+
+function findGeneratedDocument(job, name, source = 'generated') {
+  for (const order of job.orders || []) {
+    for (const document of order.documents || []) {
+      if (document.name === name && (document.source || 'primary') === source) return document;
+    }
+  }
+  return null;
 }
 
 async function isAuthorizedDocumentRequest(req, requestUrl, config, store) {
@@ -970,11 +1077,12 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
 
-    const snapshots = orderNumbers
+    const selectedOrders = orderNumbers
       .map((orderNumber) => byOrderNumber.get(orderNumber))
-      .filter(Boolean)
-      .map((order) => orderToPrintSnapshot(order, selectedTypes))
-      .filter((order) => order.documents.length > 0);
+      .filter(Boolean);
+    const snapshots = buildPrintSnapshots(selectedOrders, selectedTypes, {
+      includeComboSeparators: body.includeComboSeparators === true
+    });
 
     if (snapshots.length === 0) {
       sendJson(res, 400, { error: 'No printable documents were found for the selected orders.' });
@@ -1085,6 +1193,33 @@ async function handleApi(req, res, requestUrl, context) {
 
     if (!(await isAuthorizedDocumentRequest(req, requestUrl, config, store))) {
       sendJson(res, 401, { error: 'Login required.' });
+      return;
+    }
+
+    if (source === 'generated') {
+      const jobId = requestUrl.searchParams.get('jobId') || '';
+      const token = requestUrl.searchParams.get('token') || '';
+      const job = jobId ? await store.getJob(jobId) : null;
+      const document = job ? findGeneratedDocument(job, name, source) : null;
+
+      if (!job || !document || !job.callbackToken || !safeEqual(token, job.callbackToken)) {
+        sendJson(res, 401, { error: 'Generated document is not authorized.' });
+        return;
+      }
+
+      if (document.generated?.kind !== 'comboSeparator') {
+        sendJson(res, 404, { error: 'Generated document not found.' });
+        return;
+      }
+
+      const body = createCenteredTextPdf(document.generated.text || document.separatorLabel || 'No delivery method');
+      res.writeHead(200, {
+        'content-type': 'application/pdf',
+        'content-length': body.length,
+        'content-disposition': `inline; filename="${path.basename(document.fileName || 'combo-separator.pdf').replaceAll('"', '')}"`,
+        'cache-control': 'private, max-age=30'
+      });
+      res.end(body);
       return;
     }
 

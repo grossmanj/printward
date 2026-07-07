@@ -1172,7 +1172,7 @@ async function saveSettings(event) {
   toast('Print defaults saved');
 }
 
-async function createPrintJob(orderNumbers) {
+async function createPrintJob(orderNumbers, options = {}) {
   return api('/api/print-jobs', {
     method: 'POST',
     body: JSON.stringify({
@@ -1180,6 +1180,7 @@ async function createPrintJob(orderNumbers) {
       orderNumbers,
       deliveryDate: state.deliveryDate,
       documentTypes: state.defaults.documentTypes,
+      includeComboSeparators: options.includeComboSeparators === true,
       printerName: state.defaults.printerName,
       options: state.defaults
     })
@@ -1230,7 +1231,10 @@ function showManualDialog(jobPayload) {
     const links = order.documents.map((document) => {
       return `<a href="${document.url}" target="_blank" rel="noreferrer">${document.typeLabel}</a>`;
     }).join('');
-    return `<div class="manual-order"><strong>Order ${order.orderNumber}</strong>${links}</div>`;
+    const label = order.isSeparator
+      ? `Combo separator ${order.separatorLabel || ''}`.trim()
+      : `Order ${order.orderNumber}`;
+    return `<div class="manual-order"><strong>${escapeHtml(label)}</strong>${links}</div>`;
   }).join('');
   elements.manualDialog.hidden = false;
   elements.manualDialog.classList.add('open');
@@ -1309,7 +1313,9 @@ async function printOrders(orderNumbers, source = {}) {
   toast(`Preparing ${printCountText(orderNumbers.length)}`);
 
   try {
-    const jobPayload = await createPrintJob(orderNumbers);
+    const jobPayload = await createPrintJob(orderNumbers, {
+      includeComboSeparators: ['group', 'selected'].includes(source.type)
+    });
     await loadPrintJobs();
 
     if (!state.agentOnline) {

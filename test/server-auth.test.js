@@ -295,6 +295,71 @@ test('print job history lists jobs and can create exact retry packets', async (t
   assert.match(retryPayload.manifest.orders[0].documents[0].url, /generation=1001001/);
 });
 
+test('combo print jobs include generated delivery method separator pages', async (t) => {
+  const handler = await createAuthHandler(t);
+  const login = await request(handler, '/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  const cookie = login.headers.get('set-cookie');
+
+  const createJob = await request(handler, '/api/print-jobs', {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      user: 'operator',
+      orderNumbers: ['1001', '1004'],
+      deliveryDate: '2026-06-25',
+      documentTypes: ['packingSlip', 'attachment'],
+      includeComboSeparators: true
+    })
+  });
+  assert.equal(createJob.status, 201);
+
+  const payload = await createJob.json();
+  assert.equal(payload.manifest.orders.length, 4);
+  assert.equal(payload.manifest.orders[0].isSeparator, true);
+  assert.equal(payload.manifest.orders[0].separatorLabel, 'Truck 12 Stockholm');
+  assert.equal(payload.manifest.orders[0].documents[0].source, 'generated');
+  assert.equal(payload.manifest.orders[0].documents[0].type, 'comboSeparator');
+  assert.match(payload.manifest.orders[0].documents[0].url, /source=generated/);
+  assert.equal(payload.manifest.orders[1].orderNumber, '1001');
+  assert.equal(payload.manifest.orders[2].isSeparator, true);
+  assert.equal(payload.manifest.orders[2].separatorLabel, 'Goteborg truck 31');
+  assert.equal(payload.manifest.orders[3].orderNumber, '1004');
+
+  const separator = await request(handler, payload.manifest.orders[0].documents[0].url);
+  assert.equal(separator.status, 200);
+  assert.match(separator.headers.get('content-type'), /application\/pdf/);
+
+  const completeJob = await request(handler, `/api/print-jobs/${payload.job.id}/complete`, {
+    method: 'POST',
+    headers: {
+      cookie,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      status: 'printed',
+      user: 'operator',
+      printerName: 'Office Printer'
+    })
+  });
+  assert.equal(completeJob.status, 200);
+
+  const history = await request(handler, '/api/print-jobs?limit=1', {
+    headers: { cookie }
+  });
+  assert.equal(history.status, 200);
+  const historyPayload = await history.json();
+  assert.deepEqual(historyPayload.jobs[0].orderNumbers, ['1001', '1004']);
+  assert.equal(historyPayload.jobs[0].orderCount, 2);
+  assert.equal(historyPayload.jobs[0].documentCount, 4);
+});
+
 test('print job events stream broadcasts job changes', async (t) => {
   const handler = await createAuthHandler(t);
   const login = await request(handler, '/login', {

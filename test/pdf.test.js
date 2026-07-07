@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PDFDocument } from 'pdf-lib';
 
-import { repeatPdfPages } from '../src/pdf.js';
+import { createCenteredTextPdf, repeatPdfPages } from '../src/pdf.js';
+
+test('creates a one page centered text PDF', async () => {
+  const pdf = await PDFDocument.load(createCenteredTextPdf('YLG 19P'));
+  assert.equal(pdf.getPageCount(), 1);
+  assert.equal(pdf.getPage(0).getWidth(), 612);
+  assert.equal(pdf.getPage(0).getHeight(), 792);
+});
 
 test('repeats each PDF page before moving to the next page', async () => {
   const source = await PDFDocument.create();
