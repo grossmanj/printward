@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 export const projectRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const DEFAULT_PALLET_COPY_FIELDS = ['Val2', 'Val3', 'Val5', 'Val6'];
-const DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS = ['Kyl- och Frysexpressen'];
+const DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS = ['Kyl- och Frysexpressen Mälardalen AB'];
 
 function cleanPrefix(prefix) {
   if (!prefix) return '';

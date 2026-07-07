@@ -169,14 +169,14 @@ test('requires pallet documents for Kyl och Frysexpressen orders with reported p
   ]), new Map([
     ['1001', {
       distributorNo: 123,
-      distributorName: 'Kyl- och Frysexpressen',
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
       freightRequired: true,
       freightPalletCopies: 3,
       palletDocumentRequired: true
     }],
     ['1002', {
       distributorNo: 123,
-      distributorName: 'Kyl- och Frysexpressen',
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
       freightRequired: true,
       freightPalletCopies: 2,
       palletDocumentRequired: true

@@ -108,7 +108,7 @@ test('SQL order context marks external distributors as freight-required', async 
                 Nm: 'Customer AB',
                 CustomerName: 'Customer AB',
                 SupNo: 789,
-                DistributorName: 'Kyl- och Frysexpressen',
+                DistributorName: 'Kyl- och Frysexpressen Mälardalen AB',
                 Rsp: 321,
                 PackerName: 'Warehouse Packer',
                 DelDt: 20260702,
@@ -137,7 +137,7 @@ test('SQL order context marks external distributors as freight-required', async 
   const context = contexts.get('123');
 
   assert.equal(context.distributorNo, 789);
-  assert.equal(context.distributorName, 'Kyl- och Frysexpressen');
+  assert.equal(context.distributorName, 'Kyl- och Frysexpressen Mälardalen AB');
   assert.equal(context.packerNo, 321);
   assert.equal(context.packerName, 'Warehouse Packer');
   assert.equal(context.freightRequired, true);

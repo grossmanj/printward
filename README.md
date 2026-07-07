@@ -119,7 +119,7 @@ The sync job:
 - Uses `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as the reported pallet/half-pallet count for pallet document copies.
 - Calls nShift `ConsignmentWS.printWaybill` for each consignment number.
 - Merges multiple PDFs into one `freight{OrdNo}.pdf`.
-- For `Kyl- och Frysexpressen` orders with reported pallets, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`.
+- For `Kyl- och Frysexpressen Mälardalen AB` orders with reported pallets, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
 
 Default demo output:
@@ -142,7 +142,7 @@ VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
 `pallet` is conditional in the UI: it is required only when the SQL order context says the distributor matches `NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS` and the pallet copy count is greater than zero. Defaults:
 
 ```text
-NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS=Kyl- och Frysexpressen
+NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS=Kyl- och Frysexpressen Mälardalen AB
 NSHIFT_PALLET_COPY_FIELDS=Val2,Val3,Val5,Val6
 NSHIFT_PALLET_PRINT_OPERATION=print
 NSHIFT_PALLET_PRINT_TYPE=2

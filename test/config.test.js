@@ -43,5 +43,5 @@ test('nShift freight sync defaults to a separate freight prefix', () => {
   assert.equal(config.nshift.palletPrintOperation, 'print');
   assert.equal(config.nshift.palletPrintType, 2);
   assert.deepEqual(config.nshift.palletCopyFields, ['Val2', 'Val3', 'Val5', 'Val6']);
-  assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen']);
+  assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen Mälardalen AB']);
 });

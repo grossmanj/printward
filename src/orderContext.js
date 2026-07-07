@@ -6,7 +6,7 @@ const DEFAULT_ACTIVE_ORDER_TYPES = new Set([1, 6, 9]);
 const FREIGHT_OPTIONAL_DISTRIBUTOR_NOS = new Set([55058127]);
 const FREIGHT_OPTIONAL_DISTRIBUTOR_NAMES = new Set(['best transport ab']);
 const DEFAULT_PALLET_COPY_FIELDS = ['Val2', 'Val3', 'Val5', 'Val6'];
-const DEFAULT_PALLET_DOCUMENT_DISTRIBUTOR_NAMES = new Set(['kyl- och frysexpressen']);
+const DEFAULT_PALLET_DOCUMENT_DISTRIBUTOR_NAMES = new Set(['kyl- och frysexpressen mälardalen ab']);
 
 function normalizeOrderNumber(value) {
   return String(value || '').trim();

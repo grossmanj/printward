@@ -36,7 +36,7 @@ function normalizeName(value) {
 function normalizedNameSet(values = []) {
   return normalizeList(values).size > 0
     ? new Set(Array.from(normalizeList(values), normalizeName).filter(Boolean))
-    : new Set(['kyl- och frysexpressen']);
+    : new Set(['kyl- och frysexpressen mälardalen ab']);
 }
 
 function numericPackageValue(row, field) {

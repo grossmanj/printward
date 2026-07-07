@@ -121,7 +121,7 @@ test('syncs pallet documents for Kyl och Frysexpressen shipments with pallet cop
     shipments: [
       {
         orderNumber: '1001',
-        distributorName: 'Kyl- och Frysexpressen',
+        distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
         freightPalletCopies: 3,
         consignments: [{ kind: 'fresh', consignmentNo: 'FRESH1' }]
       }
@@ -168,7 +168,7 @@ test('backfills missing pallet PDFs without refetching existing freight PDFs', a
     shipments: [
       {
         orderNumber: '1001',
-        distributorName: 'Kyl- och Frysexpressen',
+        distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
         freightPalletCopies: 2,
         consignments: [{ kind: 'fresh', consignmentNo: 'FRESH1' }]
       }
