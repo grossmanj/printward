@@ -3,6 +3,9 @@ import { fileURLToPath } from 'node:url';
 
 export const projectRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
+const DEFAULT_PALLET_COPY_FIELDS = ['Val2', 'Val3', 'Val5', 'Val6'];
+const DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS = ['Kyl- och Frysexpressen'];
+
 function cleanPrefix(prefix) {
   if (!prefix) return '';
   return prefix.replace(/^\/+/, '');
@@ -21,10 +24,10 @@ export function loadConfig(env = process.env) {
   const gcsPrefix = cleanPrefix(env.GCS_PREFIX || '');
   const defaultNshiftOutputPrefix = gcsPrefix ? `freight/${gcsPrefix}` : 'freight/';
   const liveDefaultDocumentTypes = freightBucket
-    ? ['packingSlip', 'attachment', 'freight']
+    ? ['pallet', 'packingSlip', 'attachment', 'freight']
     : ['packingSlip', 'attachment'];
   const defaultDocumentTypes = mode === 'mock'
-    ? ['packingSlip', 'attachment', 'freight']
+    ? ['pallet', 'packingSlip', 'attachment', 'freight']
     : liveDefaultDocumentTypes;
   const requiredDocumentTypes = parseList(env.REQUIRED_DOCUMENT_TYPES, defaultDocumentTypes);
   const visibleDocumentTypes = parseList(env.VISIBLE_DOCUMENT_TYPES, requiredDocumentTypes);
@@ -93,7 +96,9 @@ export function loadConfig(env = process.env) {
       freightFrInfTp: Number(env.NSHIFT_FREEINF1_FRINFTP || 1213),
       freightFrInfTp2: Number(env.NSHIFT_FREEINF1_FRINFTP2 || 2386),
       freightFrInfTp3: Number(env.NSHIFT_FREEINF1_FRINFTP3 || 5325),
-      freightBookedStatuses: nshiftBookedStatuses
+      freightBookedStatuses: nshiftBookedStatuses,
+      palletCopyFields: parseList(env.NSHIFT_PALLET_COPY_FIELDS, DEFAULT_PALLET_COPY_FIELDS),
+      palletDocumentDistributors: parseList(env.NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS, DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS)
     },
     nshift: {
       endpoint: env.NSHIFT_ENDPOINT || 'https://service.web-ta.net:443/ws/services/ConsignmentWS',
@@ -103,6 +108,12 @@ export function loadConfig(env = process.env) {
       printOperation: env.NSHIFT_PRINT_OPERATION || 'printWaybill',
       printType: Number(env.NSHIFT_PRINT_TYPE || 1),
       printFormat: env.NSHIFT_PRINT_FORMAT || 'PDF',
+      palletFetchEnabled: String(env.NSHIFT_PALLET_FETCH_ENABLED || 'true').toLowerCase() !== 'false',
+      palletPrintOperation: env.NSHIFT_PALLET_PRINT_OPERATION || 'print',
+      palletPrintType: Number(env.NSHIFT_PALLET_PRINT_TYPE || 2),
+      palletPrintFormat: env.NSHIFT_PALLET_PRINT_FORMAT || env.NSHIFT_PRINT_FORMAT || 'PDF',
+      palletCopyFields: parseList(env.NSHIFT_PALLET_COPY_FIELDS, DEFAULT_PALLET_COPY_FIELDS),
+      palletDocumentDistributors: parseList(env.NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS, DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS),
       timeoutMs: Number(env.NSHIFT_TIMEOUT_MS || 30_000),
       syncLimit: Number(env.NSHIFT_SYNC_LIMIT || 100),
       candidateLimit: Number(env.NSHIFT_SYNC_CANDIDATE_LIMIT || Math.max(Number(env.NSHIFT_SYNC_LIMIT || 100) * 10, Number(env.NSHIFT_SYNC_LIMIT || 100))),

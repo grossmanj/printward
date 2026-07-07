@@ -1,4 +1,11 @@
 export const DOCUMENT_TYPES = {
+  pallet: {
+    key: 'pallet',
+    label: 'Pallet document',
+    shortLabel: 'Pallet',
+    filePrefix: 'pallet',
+    order: 0
+  },
   packingSlip: {
     key: 'packingSlip',
     label: 'Packing slip',
@@ -31,6 +38,7 @@ const FREIGHT_PRINT_COPY_RULES = new Map([
 ]);
 
 const MATCHERS = [
+  ['pallet', /^pallet([0-9A-Za-z_-]+)\.pdf$/i],
   ['packingSlip', /^order([0-9A-Za-z_-]+)\.pdf$/i],
   ['attachment', /^parti([0-9A-Za-z_-]+)\.pdf$/i],
   ['freight', /^freight([0-9A-Za-z_-]+)\.pdf$/i]
@@ -135,8 +143,18 @@ function freightPageCopiesForOrder(order) {
   return FREIGHT_PRINT_COPY_RULES.get(normalizedDistributorName(order.context?.distributorName)) || 1;
 }
 
+function palletPageCopiesForOrder(order) {
+  return Math.min(100, Math.max(1, Math.trunc(Number(order.context?.freightPalletCopies || 0) || 1)));
+}
+
+function requiresPalletDocument(order) {
+  if (order.context?.palletDocumentRequired) return true;
+  return Boolean(order.documents?.pallet);
+}
+
 function requiredTypesForOrder(order, requiredTypes = DOCUMENT_ORDER) {
   return normalizedDocumentTypes(requiredTypes).filter((type) => {
+    if (type === 'pallet') return requiresPalletDocument(order);
     if (type !== 'freight') return true;
     return Boolean(order.context?.freightRequired || order.documents?.freight);
   });
@@ -196,7 +214,7 @@ export function buildOrders(objects, printIndex = { latestByDoc: new Map() }, op
       }
     }
 
-    const missingTypes = requiredTypes.filter((type) => !order.documents[type]);
+    const missingTypes = requiredTypes.filter((type) => type !== 'pallet' && !order.documents[type]);
     const latestUpdated = DOCUMENT_ORDER
       .map((type) => order.documents[type]?.updated)
       .filter(Boolean)
@@ -356,6 +374,7 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
 export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
   const freightPageCopies = freightPageCopiesForOrder(order);
+  const palletPageCopies = palletPageCopiesForOrder(order);
   return {
     orderNumber: order.orderNumber,
     missingTypes: order.missingTypes.filter((type) => selected.has(type)),
@@ -374,7 +393,9 @@ export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
         updated: document.updated,
         generation: document.generation,
         contentType: document.contentType,
-        pageCopies: document.type === 'freight' && freightPageCopies > 1 ? freightPageCopies : undefined
+        pageCopies: document.type === 'pallet' && palletPageCopies > 1
+          ? palletPageCopies
+          : (document.type === 'freight' && freightPageCopies > 1 ? freightPageCopies : undefined)
       }))
   };
 }

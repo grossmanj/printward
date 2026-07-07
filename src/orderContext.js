@@ -5,6 +5,8 @@ const ACTIVE_ORDER_PROCESSED_MASK = 12582912;
 const DEFAULT_ACTIVE_ORDER_TYPES = new Set([1, 6, 9]);
 const FREIGHT_OPTIONAL_DISTRIBUTOR_NOS = new Set([55058127]);
 const FREIGHT_OPTIONAL_DISTRIBUTOR_NAMES = new Set(['best transport ab']);
+const DEFAULT_PALLET_COPY_FIELDS = ['Val2', 'Val3', 'Val5', 'Val6'];
+const DEFAULT_PALLET_DOCUMENT_DISTRIBUTOR_NAMES = new Set(['kyl- och frysexpressen']);
 
 function normalizeOrderNumber(value) {
   return String(value || '').trim();
@@ -86,6 +88,29 @@ function isFreightRequiredForDistributor(distributorNo, distributorName) {
   return true;
 }
 
+function normalizeDistributorSet(values = []) {
+  const normalized = values
+    .map(normalizeDistributorName)
+    .filter(Boolean);
+  return new Set(normalized.length > 0 ? normalized : DEFAULT_PALLET_DOCUMENT_DISTRIBUTOR_NAMES);
+}
+
+function isPalletDocumentDistributor(distributorName, names) {
+  return normalizeDistributorSet(names).has(normalizeDistributorName(distributorName));
+}
+
+function numericPackageValue(row, field) {
+  const key = String(field || '').trim();
+  if (!key) return 0;
+  const value = row[key] ?? row[`Freight${key}`] ?? row[`freight${key}`];
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function palletCopiesFromRow(row, fields = DEFAULT_PALLET_COPY_FIELDS) {
+  return Math.trunc(fields.reduce((sum, field) => sum + numericPackageValue(row, field), 0));
+}
+
 function packingDepartmentLabel(row) {
   const bit = Number(row.departmentBit ?? row.DepartmentBit ?? 0);
   if (bit === 1) return 'Dry';
@@ -113,7 +138,7 @@ function uniqueNonEmpty(values) {
   ));
 }
 
-function normalizeOrderContext(row, lines = [], packingDepartments = []) {
+function normalizeOrderContext(row, lines = [], packingDepartments = [], options = {}) {
   const orderNumber = normalizeOrderNumber(row.orderNumber ?? row.OrdNo);
   const topLines = lines.map(normalizeLine).filter((line) => line.productNo || line.description);
   const normalizedPackingDepartments = (packingDepartments.length > 0 ? packingDepartments : row.packingDepartments || row.PackingDepartments || [])
@@ -130,6 +155,20 @@ function normalizeOrderContext(row, lines = [], packingDepartments = []) {
   const distributorNo = Number(row.distributorNo ?? row.SupNo ?? 0) || 0;
   const distributorName = String(row.distributorName ?? row.DistributorName ?? '').trim();
   const freightRequired = isFreightRequiredForDistributor(distributorNo, distributorName);
+  const palletCopyFields = options.palletCopyFields || row.palletCopyFields || DEFAULT_PALLET_COPY_FIELDS;
+  const freightPalletCopies = Math.max(
+    0,
+    Math.trunc(Number(row.freightPalletCopies ?? row.FreightPalletCopies ?? palletCopiesFromRow(row, palletCopyFields)) || 0)
+  );
+  const explicitPalletRequired = row.palletDocumentRequired ?? row.PalletDocumentRequired;
+  const palletDocumentRequired = typeof explicitPalletRequired === 'boolean'
+    ? explicitPalletRequired
+    : freightRequired
+      && freightPalletCopies > 0
+      && isPalletDocumentDistributor(
+        distributorName,
+        options.palletDocumentDistributors || row.palletDocumentDistributors
+      );
   const packerNo = Number(row.packerNo ?? row.Rsp ?? 0) || 0;
   const packerName = packerNo > 0 ? String(row.packerName ?? row.PackerName ?? '').trim() : '';
 
@@ -156,6 +195,8 @@ function normalizeOrderContext(row, lines = [], packingDepartments = []) {
     freightRequired,
     freightStatus: Number(row.freightStatus ?? row.FreightStatus ?? 0) || null,
     freightConsignmentNumbers,
+    freightPalletCopies,
+    palletDocumentRequired,
     deliveryMethod: Number(row.deliveryMethod ?? row.DelMt ?? 0) || null,
     deliveryMethodName: String(row.deliveryMethodName ?? row.DeliveryMethodName ?? '').trim(),
     dispatchPriority: Number(row.dispatchPriority ?? row.DelPri ?? 0) || null,
@@ -403,7 +444,13 @@ export class SqlServerOrderContextClient {
         END AS FreightRequired,
         ISNULL(freight.Val1, 0) AS FreightStatus,
         ISNULL(freight.Txt1, '') AS FreightConsignmentFresh,
-        ISNULL(freight.Txt2, '') AS FreightConsignmentFrozen
+        ISNULL(freight.Txt2, '') AS FreightConsignmentFrozen,
+        ISNULL(freight.Val2, 0) AS FreightVal2,
+        ISNULL(freight.Val3, 0) AS FreightVal3,
+        ISNULL(freight.Val4, 0) AS FreightVal4,
+        ISNULL(freight.Val5, 0) AS FreightVal5,
+        ISNULL(freight.Val6, 0) AS FreightVal6,
+        ISNULL(freight.Val7, 0) AS FreightVal7
       FROM Ord o
       INNER JOIN @OrderNos f ON f.OrdNo = o.OrdNo
       LEFT JOIN Txt deliveryMethod
@@ -434,7 +481,13 @@ export class SqlServerOrderContextClient {
           info.OrdNo,
           info.Val1,
           info.Txt1,
-          info.Txt2
+          info.Txt2,
+          info.Val2,
+          info.Val3,
+          info.Val4,
+          info.Val5,
+          info.Val6,
+          info.Val7
         FROM FreeInf1 info
         WHERE info.OrdNo = o.OrdNo
           AND info.InfCatNo = @freightInfCatNo
@@ -565,7 +618,10 @@ export class SqlServerOrderContextClient {
         lineCount: Number(summary.LineCount || 0),
         totalQuantity: Number(summary.TotalQuantity || 0),
         source: 'sqlserver'
-      }, linesByOrder.get(key) || [], packingByOrder.get(key) || []);
+      }, linesByOrder.get(key) || [], packingByOrder.get(key) || [], {
+        palletCopyFields: this.config.palletCopyFields,
+        palletDocumentDistributors: this.config.palletDocumentDistributors
+      });
       result.set(key, context);
     }
 
@@ -622,6 +678,8 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       freightRequired: false,
       freightStatus: null,
       freightConsignmentNumbers: [],
+      freightPalletCopies: 0,
+      palletDocumentRequired: false,
       deliveryMethod: null,
       deliveryMethodName: '',
       dispatchPriority: null,

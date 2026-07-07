@@ -347,7 +347,7 @@ function buildManifest(req, job) {
     : '';
   const documentTransformParams = (document) => {
     const pageCopies = normalizedPageCopies(document.pageCopies);
-    return pageCopies > 1 && document.type === 'freight'
+    return pageCopies > 1
       ? `&copyMode=perPage&pageCopies=${encodeURIComponent(String(pageCopies))}`
       : '';
   };
@@ -558,6 +558,16 @@ function buildPrintSnapshots(orders, selectedTypes, options = {}) {
   });
 
   return snapshots;
+}
+
+function includeRequiredDocumentTypes(selectedTypes, orders) {
+  const selected = new Set(selectedTypes);
+  for (const order of orders || []) {
+    for (const type of order.requiredTypes || []) {
+      selected.add(type);
+    }
+  }
+  return DOCUMENT_ORDER.filter((type) => selected.has(type));
 }
 
 function findGeneratedDocument(job, name, source = 'generated') {
@@ -1080,7 +1090,8 @@ async function handleApi(req, res, requestUrl, context) {
     const selectedOrders = orderNumbers
       .map((orderNumber) => byOrderNumber.get(orderNumber))
       .filter(Boolean);
-    const snapshots = buildPrintSnapshots(selectedOrders, selectedTypes, {
+    const printTypes = includeRequiredDocumentTypes(selectedTypes, selectedOrders);
+    const snapshots = buildPrintSnapshots(selectedOrders, printTypes, {
       includeComboSeparators: body.includeComboSeparators === true
     });
 

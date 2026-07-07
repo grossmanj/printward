@@ -14,6 +14,11 @@ import { attachOrderContexts } from '../src/orderContext.js';
 import { buildPrintIndex } from '../src/stateStore.js';
 
 test('classifies order document file names', () => {
+  assert.deepEqual(classifyObject('freight/2/pallet123.pdf'), {
+    type: 'pallet',
+    orderNumber: '123',
+    fileName: 'pallet123.pdf'
+  });
   assert.deepEqual(classifyObject('order123.pdf'), {
     type: 'packingSlip',
     orderNumber: '123',
@@ -150,6 +155,42 @@ test('requires freight only for freight orders when freight is enabled', () => {
   assert.equal(byOrder.get('1001').packetStatus, 'pending');
   assert.deepEqual(byOrder.get('1002').missingTypes, ['freight']);
   assert.equal(byOrder.get('1002').packetStatus, 'missing');
+});
+
+test('requires pallet documents for Kyl och Frysexpressen orders with reported pallets', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
+    { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' },
+    { name: 'freight1001.pdf', updated: '2026-06-24T08:02:00.000Z', generation: '3' },
+    { name: 'order1002.pdf', updated: '2026-06-24T09:00:00.000Z', generation: '4' },
+    { name: 'parti1002.pdf', updated: '2026-06-24T09:01:00.000Z', generation: '5' },
+    { name: 'freight1002.pdf', updated: '2026-06-24T09:02:00.000Z', generation: '6' },
+    { name: 'pallet1002.pdf', updated: '2026-06-24T09:03:00.000Z', generation: '7' }
+  ]), new Map([
+    ['1001', {
+      distributorNo: 123,
+      distributorName: 'Kyl- och Frysexpressen',
+      freightRequired: true,
+      freightPalletCopies: 3,
+      palletDocumentRequired: true
+    }],
+    ['1002', {
+      distributorNo: 123,
+      distributorName: 'Kyl- och Frysexpressen',
+      freightRequired: true,
+      freightPalletCopies: 2,
+      palletDocumentRequired: true
+    }]
+  ]));
+
+  const required = applyDocumentRequirements(orders, ['pallet', 'packingSlip', 'attachment', 'freight']);
+  const byOrder = new Map(required.map((order) => [order.orderNumber, order]));
+  assert.deepEqual(byOrder.get('1001').missingTypes, ['pallet']);
+  assert.deepEqual(byOrder.get('1002').missingTypes, []);
+
+  const snapshot = orderToPrintSnapshot(byOrder.get('1002'), ['pallet', 'packingSlip', 'attachment', 'freight']);
+  assert.deepEqual(snapshot.documents.map((document) => document.type), ['pallet', 'packingSlip', 'attachment', 'freight']);
+  assert.equal(snapshot.documents[0].pageCopies, 2);
 });
 
 test('requires visible freight documents even without freight context', () => {

@@ -30,6 +30,16 @@ test('builds nShift batch print SOAP envelope', () => {
   assert.match(xml, /<typ:print>/);
   assert.match(xml, /<arrayOfConsignmentNo>A<\/arrayOfConsignmentNo>/);
   assert.match(xml, /<arrayOfConsignmentNo>B<\/arrayOfConsignmentNo>/);
+  assert.match(xml, /<type>1<\/type>/);
+  assert.match(xml, /<format>PDF<\/format>/);
+});
+
+test('builds nShift batch print SOAP envelope with per-call print type', () => {
+  const xml = buildPrintEnvelope(config, ['A'], { printType: 2, printFormat: 'PDF' });
+
+  assert.match(xml, /<typ:print>/);
+  assert.match(xml, /<arrayOfConsignmentNo>A<\/arrayOfConsignmentNo>/);
+  assert.match(xml, /<type>2<\/type>/);
   assert.match(xml, /<format>PDF<\/format>/);
 });
 

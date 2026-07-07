@@ -9,7 +9,7 @@ export const DEFAULT_PRINT_SETTINGS = {
   staple: true,
   stapleOption: 'StapleLocation=UpperLeft',
   colorMode: 'auto',
-  documentTypes: ['packingSlip', 'attachment', 'freight'],
+  documentTypes: ['pallet', 'packingSlip', 'attachment', 'freight'],
   agentUrl: 'http://127.0.0.1:37951'
 };
 

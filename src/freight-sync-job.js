@@ -18,7 +18,12 @@ try {
     allowedConsignmentNumbers: config.nshift.allowedConsignmentNumbers,
     outputBucket: config.nshift.outputBucket,
     outputPrefix: config.nshift.outputPrefix,
-    dryRun: config.nshift.dryRun
+    dryRun: config.nshift.dryRun,
+    palletFetchEnabled: config.nshift.palletFetchEnabled,
+    palletPrintOperation: config.nshift.palletPrintOperation,
+    palletPrintType: config.nshift.palletPrintType,
+    palletCopyFields: config.nshift.palletCopyFields,
+    palletDocumentDistributors: config.nshift.palletDocumentDistributors
   }, null, 2));
 
   for (const item of result.results) {

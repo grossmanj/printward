@@ -64,17 +64,20 @@ export function buildPrintWaybillEnvelope(config, consignmentNo) {
   ].join(''));
 }
 
-export function buildPrintEnvelope(config, consignmentNumbers) {
+export function buildPrintEnvelope(config, consignmentNumbers, options = {}) {
   const consignments = consignmentNumbers
     .map((consignmentNo) => `<arrayOfConsignmentNo>${xmlEscape(consignmentNo)}</arrayOfConsignmentNo>`)
     .join('');
+
+  const printType = options.printType ?? config.printType ?? 1;
+  const printFormat = options.printFormat ?? config.printFormat ?? 'PDF';
 
   return envelope([
     '<typ:print>',
     authenticationXml(config),
     consignments,
-    `<type>${Number(config.printType || 1)}</type>`,
-    `<format>${xmlEscape(config.printFormat || 'PDF')}</format>`,
+    `<type>${Number(printType || 1)}</type>`,
+    `<format>${xmlEscape(printFormat)}</format>`,
     '</typ:print>'
   ].join(''));
 }
@@ -167,19 +170,20 @@ export class NshiftConsignmentClient {
     return result.documents;
   }
 
-  async print(consignmentNumbers) {
-    const xml = buildPrintEnvelope(this.config, consignmentNumbers);
+  async print(consignmentNumbers, options = {}) {
+    const xml = buildPrintEnvelope(this.config, consignmentNumbers, options);
     const result = parsePrintResult(await this.call(xml));
     this.assertPrintable(result, consignmentNumbers);
     return result.documents;
   }
 
-  async printDocuments(consignmentNumbers) {
+  async printDocuments(consignmentNumbers, options = {}) {
     const normalized = Array.from(new Set(consignmentNumbers.map(String).map((item) => item.trim()).filter(Boolean)));
     if (normalized.length === 0) return [];
 
-    if (this.config.printOperation === 'print') {
-      return this.print(normalized);
+    const operation = options.printOperation || this.config.printOperation;
+    if (operation === 'print') {
+      return this.print(normalized, options);
     }
 
     const documents = [];

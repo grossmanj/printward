@@ -250,6 +250,7 @@ test('print job history lists jobs and can create exact retry packets', async (t
   assert.equal(createJob.status, 201);
 
   const created = await createJob.json();
+  assert.deepEqual(created.job.orders[0].documents.map((document) => document.type), ['packingSlip', 'attachment']);
   assert.match(created.manifest.orders[0].documents[0].url, /generation=1001001/);
 
   const completeJob = await request(handler, `/api/print-jobs/${created.job.id}/complete`, {
@@ -274,7 +275,7 @@ test('print job history lists jobs and can create exact retry packets', async (t
   assert.equal(historyPayload.jobs[0].id, created.job.id);
   assert.equal(historyPayload.jobs[0].status, 'printed');
   assert.deepEqual(historyPayload.jobs[0].orderNumbers, ['1001']);
-  assert.equal(historyPayload.jobs[0].documentCount, 1);
+  assert.equal(historyPayload.jobs[0].documentCount, 2);
   assert.equal(historyPayload.jobs[0].changes.hasChanges, false);
 
   const retryJob = await request(handler, `/api/print-jobs/${created.job.id}/retry`, {
@@ -291,6 +292,7 @@ test('print job history lists jobs and can create exact retry packets', async (t
   assert.equal(retryJob.status, 201);
   const retryPayload = await retryJob.json();
   assert.notEqual(retryPayload.job.id, created.job.id);
+  assert.deepEqual(retryPayload.job.orders[0].documents.map((document) => document.type), ['packingSlip', 'attachment']);
   assert.equal(retryPayload.job.orders[0].documents[0].generation, '1001001');
   assert.match(retryPayload.manifest.orders[0].documents[0].url, /generation=1001001/);
 });

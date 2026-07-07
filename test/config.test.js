@@ -25,8 +25,8 @@ test('freight source opt-in adds freight documents to the workflow', () => {
   });
 
   assert.equal(config.freightGcs.mode, 'live');
-  assert.deepEqual(config.documentTypes.required, ['packingSlip', 'attachment', 'freight']);
-  assert.deepEqual(config.documentTypes.visible, ['packingSlip', 'attachment', 'freight']);
+  assert.deepEqual(config.documentTypes.required, ['pallet', 'packingSlip', 'attachment', 'freight']);
+  assert.deepEqual(config.documentTypes.visible, ['pallet', 'packingSlip', 'attachment', 'freight']);
 });
 
 test('nShift freight sync defaults to a separate freight prefix', () => {
@@ -39,4 +39,9 @@ test('nShift freight sync defaults to a separate freight prefix', () => {
   assert.equal(config.nshift.outputPrefix, 'freight/9992/');
   assert.deepEqual(config.nshift.bookedStatuses, [2, 8]);
   assert.equal(config.nshift.fetchEnabled, false);
+  assert.equal(config.nshift.palletFetchEnabled, true);
+  assert.equal(config.nshift.palletPrintOperation, 'print');
+  assert.equal(config.nshift.palletPrintType, 2);
+  assert.deepEqual(config.nshift.palletCopyFields, ['Val2', 'Val3', 'Val5', 'Val6']);
+  assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen']);
 });

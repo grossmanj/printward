@@ -6,6 +6,7 @@ It groups PDFs by order number:
 
 - `orderX.pdf`: packing slip
 - `partiX.pdf`: packing slip attachment
+- `palletX.pdf`: pallet document
 - `freightX.pdf`: freight document
 
 The app shows whether each current document version has been printed. If a PDF is updated in the bucket after printing, it returns to a reprint-needed state.
@@ -105,7 +106,7 @@ FREIGHT_GCS_BUCKET=another-bucket-when-ready
 FREIGHT_GCS_PREFIX=freight-prefix/
 ```
 
-When freight PDFs are introduced in another bucket, set `FREIGHT_GCS_BUCKET` and optionally `FREIGHT_GCS_PREFIX`, then include `freight` in `REQUIRED_DOCUMENT_TYPES` and `VISIBLE_DOCUMENT_TYPES`.
+When freight PDFs are introduced in another bucket, set `FREIGHT_GCS_BUCKET` and optionally `FREIGHT_GCS_PREFIX`, then include `pallet` and `freight` in `REQUIRED_DOCUMENT_TYPES` and `VISIBLE_DOCUMENT_TYPES`.
 
 ## Sync nShift freight documents
 
@@ -115,14 +116,17 @@ The sync job:
 
 - Reads booked consignments from `FreeInf1` where `InfCatNo = 8376`, `FrInfTp = 1213`, `FrInfTp2 = 2386`, `FrInfTp3 = 5325`, and `Val1 IN (2, 8)`.
 - Uses `FreeInf1.Txt1` and `FreeInf1.Txt2` as fresh/chilled and frozen consignment numbers.
+- Uses `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as the reported pallet/half-pallet count for pallet document copies.
 - Calls nShift `ConsignmentWS.printWaybill` for each consignment number.
 - Merges multiple PDFs into one `freight{OrdNo}.pdf`.
+- For `Kyl- och Frysexpressen` orders with reported pallets, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
 
 Default demo output:
 
 ```text
 gs://pdf-service-bucket/freight/9992/freight{OrdNo}.pdf
+gs://pdf-service-bucket/freight/9992/pallet{OrdNo}.pdf
 ```
 
 When the job is active, configure the web app to scan that freight prefix:
@@ -131,8 +135,17 @@ When the job is active, configure the web app to scan that freight prefix:
 INCLUDE_FREIGHT=true
 FREIGHT_GCS_BUCKET=pdf-service-bucket
 FREIGHT_GCS_PREFIX=freight/9992/
-REQUIRED_DOCUMENT_TYPES=packingSlip,attachment,freight
-VISIBLE_DOCUMENT_TYPES=packingSlip,attachment,freight
+REQUIRED_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
+VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
+```
+
+`pallet` is conditional in the UI: it is required only when the SQL order context says the distributor matches `NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS` and the pallet copy count is greater than zero. Defaults:
+
+```text
+NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS=Kyl- och Frysexpressen
+NSHIFT_PALLET_COPY_FIELDS=Val2,Val3,Val5,Val6
+NSHIFT_PALLET_PRINT_OPERATION=print
+NSHIFT_PALLET_PRINT_TYPE=2
 ```
 
 Store nShift credentials in Secret Manager. Do not commit or paste them into deploy scripts:
@@ -265,8 +278,8 @@ If freight sync is deployed for demo, also set:
 INCLUDE_FREIGHT=true
 FREIGHT_GCS_BUCKET=pdf-service-bucket
 FREIGHT_GCS_PREFIX=freight/9992/
-REQUIRED_DOCUMENT_TYPES=packingSlip,attachment,freight
-VISIBLE_DOCUMENT_TYPES=packingSlip,attachment,freight
+REQUIRED_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
+VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
 ```
 
 Production should be deployed with the production prefix and database:

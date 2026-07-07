@@ -922,7 +922,7 @@ function environmentLabel(health) {
 
 function configuredDocumentTypes() {
   const types = Object.keys(state.documentTypes || {});
-  return types.length > 0 ? types : ['packingSlip', 'attachment', 'freight'];
+  return types.length > 0 ? types : ['pallet', 'packingSlip', 'attachment', 'freight'];
 }
 
 function syncDocumentTypeControls() {

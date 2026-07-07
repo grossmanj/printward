@@ -31,6 +31,8 @@ test('attaches missing order context safely', () => {
   assert.equal(orders[0].context.distributorName, '');
   assert.equal(orders[0].context.freightRequired, false);
   assert.deepEqual(orders[0].context.freightConsignmentNumbers, []);
+  assert.equal(orders[0].context.freightPalletCopies, 0);
+  assert.equal(orders[0].context.palletDocumentRequired, false);
   assert.equal(orders[0].context.deliveryMethodName, '');
   assert.equal(orders[0].context.dispatchTime, null);
   assert.equal(orders[0].context.packerNo, 0);
@@ -79,6 +81,8 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /ISNULL\(packer\.Nm, ''\) AS PackerName/);
   assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) NOT IN \(55058127\)/);
   assert.match(queries[1], /LOWER\(LTRIM\(RTRIM\(ISNULL\(distributor\.Nm, ''\)\)\)\) NOT IN \('best transport ab'\)/);
+  assert.match(queries[1], /ISNULL\(freight\.Val2, 0\) AS FreightVal2/);
+  assert.match(queries[1], /ISNULL\(freight\.Val7, 0\) AS FreightVal7/);
   assert.equal([...queries[1].matchAll(/\(ISNULL\(l\.ExcPrint, 0\) & 16384\) = 0/g)].length, 3);
   assert.match(queries[1], /LinesLeftToPack AS/);
   assert.match(queries[1], /QuantityLeftToPack = CAST\(ROUND\(SUM\(ISNULL\(NoInvoAb, 0\)\), 2\) AS DECIMAL\(18, 2\)\)/);
@@ -104,7 +108,7 @@ test('SQL order context marks external distributors as freight-required', async 
                 Nm: 'Customer AB',
                 CustomerName: 'Customer AB',
                 SupNo: 789,
-                DistributorName: 'External Freight AB',
+                DistributorName: 'Kyl- och Frysexpressen',
                 Rsp: 321,
                 PackerName: 'Warehouse Packer',
                 DelDt: 20260702,
@@ -114,7 +118,10 @@ test('SQL order context marks external distributors as freight-required', async 
                 OrdTp: 1,
                 OrdPrSt: 8,
                 FreightRequired: 1,
-                FreightConsignmentFresh: 'ABC'
+                FreightConsignmentFresh: 'ABC',
+                FreightVal2: 2,
+                FreightVal4: 10,
+                FreightVal5: 1
               }],
               [{ OrdNo: 123, LineCount: 1, TotalQuantity: 4 }],
               [{ OrdNo: 123, LnNo: 1, ProdNo: 'P1', Descr: 'Product', Quantity: 4, Unit: 'kg', Note: '' }],
@@ -130,10 +137,12 @@ test('SQL order context marks external distributors as freight-required', async 
   const context = contexts.get('123');
 
   assert.equal(context.distributorNo, 789);
-  assert.equal(context.distributorName, 'External Freight AB');
+  assert.equal(context.distributorName, 'Kyl- och Frysexpressen');
   assert.equal(context.packerNo, 321);
   assert.equal(context.packerName, 'Warehouse Packer');
   assert.equal(context.freightRequired, true);
+  assert.equal(context.freightPalletCopies, 3);
+  assert.equal(context.palletDocumentRequired, true);
   assert.equal(context.dispatchTime, '12:00');
   assert.equal(context.lineCount, 1);
   assert.equal(context.packingBlocked, true);
