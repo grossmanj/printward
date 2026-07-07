@@ -445,9 +445,28 @@ function hasValue(value) {
   return String(value || '').trim().length > 0;
 }
 
+function compactPageSelection(pages = []) {
+  const values = Array.from(new Set(
+    pages.map((page) => Math.trunc(Number(page))).filter((page) => Number.isInteger(page) && page > 0)
+  )).sort((left, right) => left - right);
+  const ranges = [];
+
+  for (let index = 0; index < values.length; index += 1) {
+    const start = values[index];
+    let end = start;
+    while (index + 1 < values.length && values[index + 1] === end + 1) {
+      index += 1;
+      end = values[index];
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+  }
+
+  return ranges.join(',');
+}
+
 function kylPalletPageCount(order) {
   const context = order.context || {};
-  const inferred = Math.trunc(Number(context.kylPalletLabelPages || 0)) || 0;
+  const inferred = Math.trunc(Number(context.kylPalletLabelPages || context.kylPalletPageGroups?.labelPages?.length || 0)) || 0;
   if (inferred > 0) return Math.max(1, Math.min(100, inferred));
 
   const consignmentCount = [
@@ -458,18 +477,31 @@ function kylPalletPageCount(order) {
   return Math.max(1, Math.min(100, consignmentCount || 1));
 }
 
+function kylPalletLabelPages(order) {
+  const pages = order.context?.kylPalletPageGroups?.labelPages;
+  if (Array.isArray(pages) && pages.length > 0) return pages;
+  return Array.from({ length: kylPalletPageCount(order) }, (_, index) => index + 1);
+}
+
 function kylFreightSectionDocument(order, section, label) {
   const pallet = order.documents.pallet;
   const context = order.context || {};
+  const groupKey = section === 'frozenFreight' ? 'frozenFreightPages' : 'coolingFreightPages';
+  const pages = context.kylPalletPageGroups?.[groupKey];
+  const pageSelection = Array.isArray(pages) && pages.length > 0 ? compactPageSelection(pages) : '';
   return documentForPrintSection(pallet, {
     typeLabel: label,
     fileName: sectionFileName(pallet, section),
-    kylSection: {
-      section,
-      labelPages: kylPalletPageCount(order),
-      hasCooling: hasValue(context.freightConsignmentFresh),
-      hasFrozen: hasValue(context.freightConsignmentFrozen)
-    }
+    ...(pageSelection
+      ? { pages: pageSelection }
+      : {
+          kylSection: {
+            section,
+            labelPages: kylPalletPageCount(order),
+            hasCooling: hasValue(context.freightConsignmentFresh),
+            hasFrozen: hasValue(context.freightConsignmentFrozen)
+          }
+        })
   });
 }
 
@@ -479,8 +511,8 @@ function kylPalletPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   const pallet = order.documents.pallet;
   if (!selected.has('pallet') || !pallet) return [orderToPrintSnapshot(order, selectedTypes)];
 
-  const labelPages = kylPalletPageCount(order);
-  for (let page = 1; page <= labelPages; page += 1) {
+  const labelPages = kylPalletLabelPages(order);
+  for (const page of labelPages) {
     snapshots.push(printSectionSnapshot(order, `pallet-label-${page}`, `Pallet page ${page}`, [
       documentForPrintSection(pallet, {
         typeLabel: `Pallet page ${page}`,

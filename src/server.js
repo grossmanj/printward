@@ -7,10 +7,10 @@ import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
 import {
+  analyzeKylPalletPdf,
   createCenteredTextPdf,
   extractKylFreightSection,
   extractPdfPages,
-  inferKylPalletLabelPages,
   repeatPdfPages
 } from './pdf.js';
 import {
@@ -514,30 +514,40 @@ function isKylPalletSplitOrder(order = {}) {
     && Boolean(order.documents?.pallet);
 }
 
+function validateKylPalletAnalysis(order, analysis) {
+  const context = order.context || {};
+  const hasCooling = hasText(context.freightConsignmentFresh);
+  const hasFrozen = hasText(context.freightConsignmentFrozen);
+
+  if (analysis.labelPages.length === 0) {
+    throw new Error(`No pallet label pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
+  }
+  if (hasCooling && analysis.coolingFreightPages.length === 0) {
+    throw new Error(`No Cooling freight pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
+  }
+  if (hasFrozen && analysis.frozenFreightPages.length === 0) {
+    throw new Error(`No Frozen freight pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
+  }
+  if (analysis.unknownFreightPages.length > 0) {
+    throw new Error(`Unrecognized freight pages in ${order.documents.pallet.fileName || order.documents.pallet.name}: ${analysis.unknownFreightPages.join(', ')}.`);
+  }
+}
+
 async function annotateKylPalletLabelPages(storage, orders) {
   await mapWithConcurrency(orders.filter(isKylPalletSplitOrder), 6, async (order) => {
     const pallet = order.documents.pallet;
     const context = order.context || {};
-    try {
-      const object = await storage.getObject(pallet.name, pallet.source || 'freight', pallet.generation || '');
-      const labelPages = await inferKylPalletLabelPages(object.body, {
-        hasCooling: hasText(context.freightConsignmentFresh),
-        hasFrozen: hasText(context.freightConsignmentFrozen)
-      });
-      order.context = {
-        ...context,
-        kylPalletLabelPages: labelPages
-      };
-    } catch (error) {
-      console.warn(`Unable to inspect Kyl pallet PDF for order ${order.orderNumber}: ${error.message}`);
-      order.context = {
-        ...context,
-        kylPalletLabelPages: [
-          context.freightConsignmentFresh,
-          context.freightConsignmentFrozen
-        ].filter(hasText).length || 1
-      };
-    }
+    const object = await storage.getObject(pallet.name, pallet.source || 'freight', pallet.generation || '');
+    const analysis = await analyzeKylPalletPdf(object.body);
+    validateKylPalletAnalysis(order, analysis);
+    order.context = {
+      ...context,
+      kylPalletPageGroups: {
+        labelPages: analysis.labelPages,
+        coolingFreightPages: analysis.coolingFreightPages,
+        frozenFreightPages: analysis.frozenFreightPages
+      }
+    };
   });
 }
 

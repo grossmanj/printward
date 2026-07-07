@@ -3,12 +3,24 @@ import test from 'node:test';
 import { PDFDocument } from 'pdf-lib';
 
 import {
+  analyzeKylPalletPdf,
   createCenteredTextPdf,
+  createPlaceholderPdf,
   extractKylFreightSection,
   extractPdfPages,
   inferKylPalletLabelPages,
   repeatPdfPages
 } from '../src/pdf.js';
+
+async function createMarkerPdf(pages) {
+  const merged = await PDFDocument.create();
+  for (const text of pages) {
+    const source = await PDFDocument.load(createPlaceholderPdf(text));
+    const copied = await merged.copyPages(source, source.getPageIndices());
+    copied.forEach((page) => merged.addPage(page));
+  }
+  return merged.save();
+}
 
 test('creates a one page centered text PDF', async () => {
   const pdf = await PDFDocument.load(createCenteredTextPdf('YLG 19P'));
@@ -59,16 +71,16 @@ test('extracts selected PDF pages', async () => {
 });
 
 test('extracts Kyl frozen and cooling freight sections after pallet pages', async () => {
-  const source = await PDFDocument.create();
-  source.addPage([100, 100]);
-  source.addPage([110, 110]);
-  source.addPage([200, 200]);
-  source.addPage([210, 210]);
-  source.addPage([220, 220]);
-  source.addPage([300, 300]);
-  source.addPage([310, 310]);
-  source.addPage([320, 320]);
-  const body = await source.save();
+  const body = await createMarkerPdf([
+    'Kolli-ID 1 1962465_Cooling',
+    'Kolli-ID 2 1962465_Froozen',
+    'FRAKTSEDEL 1962465_Cooling Kyla +2-+8c',
+    'FRAKTSEDEL 1962465_Cooling Kyla +2-+8c',
+    'FRAKTSEDEL 1962465_Cooling Kyla +2-+8c',
+    'FRAKTSEDEL 1962465_Froozen Fryst',
+    'FRAKTSEDEL 1962465_Froozen Fryst',
+    'FRAKTSEDEL 1962465_Froozen Fryst'
+  ]);
 
   const frozen = await PDFDocument.load(await extractKylFreightSection(body, {
     section: 'frozenFreight',
@@ -83,26 +95,32 @@ test('extracts Kyl frozen and cooling freight sections after pallet pages', asyn
     hasFrozen: true
   }));
 
-  assert.deepEqual(frozen.getPages().map((page) => page.getWidth()), [300, 310, 320]);
-  assert.deepEqual(cooling.getPages().map((page) => page.getWidth()), [200, 210, 220]);
+  assert.equal(frozen.getPageCount(), 3);
+  assert.equal(cooling.getPageCount(), 3);
+  assert.deepEqual((await analyzeKylPalletPdf(await frozen.save())).frozenFreightPages, [1, 2, 3]);
+  assert.deepEqual((await analyzeKylPalletPdf(await cooling.save())).coolingFreightPages, [1, 2, 3]);
 });
 
-test('infers Kyl label pages when requested label count is wrong', async () => {
-  const source = await PDFDocument.create();
-  source.addPage([100, 100]);
-  source.addPage([110, 110]);
-  source.addPage([200, 200]);
-  source.addPage([210, 210]);
-  source.addPage([220, 220]);
-  source.addPage([300, 300]);
-  source.addPage([310, 310]);
-  source.addPage([320, 320]);
-  const body = await source.save();
+test('classifies variable Kyl pallet label pages from page text', async () => {
+  const body = await createMarkerPdf([
+    'Kolli-ID 1 1962465_Cooling',
+    'Kolli-ID 2 1962465_Froozen',
+    'Kolli-ID 3 1962465_Froozen',
+    'FRAKTSEDEL 1962465_Cooling Kyla +2-+8c',
+    'FRAKTSEDEL 1962465_Cooling Kyla +2-+8c',
+    'FRAKTSEDEL 1962465_Froozen Fryst',
+    'FRAKTSEDEL 1962465_Froozen Fryst',
+    'FRAKTSEDEL 1962465_Froozen Fryst'
+  ]);
+  const analysis = await analyzeKylPalletPdf(body);
 
   assert.equal(await inferKylPalletLabelPages(body, {
     hasCooling: true,
     hasFrozen: true
-  }), 2);
+  }), 3);
+  assert.deepEqual(analysis.labelPages, [1, 2, 3]);
+  assert.deepEqual(analysis.coolingFreightPages, [4, 5]);
+  assert.deepEqual(analysis.frozenFreightPages, [6, 7, 8]);
 
   const frozen = await PDFDocument.load(await extractKylFreightSection(body, {
     section: 'frozenFreight',
@@ -111,5 +129,6 @@ test('infers Kyl label pages when requested label count is wrong', async () => {
     hasFrozen: true
   }));
 
-  assert.deepEqual(frozen.getPages().map((page) => page.getWidth()), [300, 310, 320]);
+  assert.equal(frozen.getPageCount(), 3);
+  assert.deepEqual((await analyzeKylPalletPdf(await frozen.save())).frozenFreightPages, [1, 2, 3]);
 });

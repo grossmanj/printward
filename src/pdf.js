@@ -1,3 +1,5 @@
+import { inflateSync } from 'node:zlib';
+
 function escapePdfText(value) {
   return String(value)
     .replace(/\\/g, '\\\\')
@@ -173,20 +175,120 @@ function boolFromQuery(value) {
   return ['1', 'true', 'yes'].includes(String(value || '').toLowerCase());
 }
 
-function kylConsignmentCount(hasCooling, hasFrozen) {
-  return [hasCooling, hasFrozen].filter(Boolean).length;
+function lookupMaybe(context, object) {
+  if (!object) return undefined;
+  try {
+    return context.lookup(object);
+  } catch {
+    return undefined;
+  }
 }
 
-function inferredKylLabelPages(pageCount, hasCooling, hasFrozen) {
-  const consignmentCount = kylConsignmentCount(hasCooling, hasFrozen);
-  if (consignmentCount <= 0) return 1;
+function dictValue(dict, PDFName, name) {
+  try {
+    return dict?.get?.(PDFName.of(name));
+  } catch {
+    return undefined;
+  }
+}
 
-  const inferred = pageCount - (consignmentCount * 3);
-  if (Number.isInteger(inferred) && inferred >= consignmentCount && inferred < pageCount) {
-    return inferred;
+function decodePdfRawStream(stream) {
+  const raw = stream.getContents ? stream.getContents() : stream.contents;
+  try {
+    return Buffer.from(inflateSync(Buffer.from(raw))).toString('latin1');
+  } catch {
+    return Buffer.from(raw || []).toString('latin1');
+  }
+}
+
+function collectPdfStreamText(pdf, streamObject, pdfLib, depth = 0, seen = new Set()) {
+  const { PDFDict, PDFName, PDFRawStream } = pdfLib;
+  if (!streamObject || depth > 6) return '';
+
+  const stream = streamObject instanceof PDFRawStream
+    ? streamObject
+    : lookupMaybe(pdf.context, streamObject);
+  if (!(stream instanceof PDFRawStream) || seen.has(stream)) return '';
+
+  seen.add(stream);
+  let text = decodePdfRawStream(stream);
+  const resources = lookupMaybe(pdf.context, dictValue(stream.dict, PDFName, 'Resources'));
+  const xObjects = lookupMaybe(pdf.context, dictValue(resources, PDFName, 'XObject'));
+
+  if (xObjects instanceof PDFDict) {
+    for (const [, xObject] of xObjects.entries()) {
+      text += `\n${collectPdfStreamText(pdf, xObject, pdfLib, depth + 1, seen)}`;
+    }
   }
 
-  return consignmentCount;
+  return text;
+}
+
+function extractPdfPageText(pdf, pageIndex, pdfLib) {
+  const { PDFArray, PDFDict, PDFName, PDFRawStream } = pdfLib;
+  const page = pdf.getPage(pageIndex);
+  const contents = page.node.Contents();
+  const seen = new Set();
+  let text = '';
+
+  if (contents instanceof PDFRawStream) {
+    text += collectPdfStreamText(pdf, contents, pdfLib, 0, seen);
+  } else if (contents instanceof PDFArray) {
+    for (let index = 0; index < contents.size(); index += 1) {
+      text += `\n${collectPdfStreamText(pdf, contents.get(index), pdfLib, 0, seen)}`;
+    }
+  }
+
+  const resources = page.node.Resources();
+  const xObjects = lookupMaybe(pdf.context, dictValue(resources, PDFName, 'XObject'));
+  if (xObjects instanceof PDFDict) {
+    for (const [, xObject] of xObjects.entries()) {
+      text += `\n${collectPdfStreamText(pdf, xObject, pdfLib, 0, seen)}`;
+    }
+  }
+
+  return text;
+}
+
+function kylPageKind(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (!normalized.includes('fraktsedel')) return 'label';
+  if (normalized.includes('froozen') || normalized.includes('frozen') || normalized.includes('fryst')) return 'frozenFreight';
+  if (normalized.includes('cooling') || normalized.includes('kyla')) return 'coolingFreight';
+  return 'unknownFreight';
+}
+
+function requirePages(pages, section) {
+  if (pages.length === 0) {
+    throw new Error(`No pages found for Kyl freight section ${section}.`);
+  }
+  return pages;
+}
+
+export async function analyzeKylPalletPdf(body) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const pdfLib = await import('pdf-lib');
+  const { PDFDocument } = pdfLib;
+  const source = await PDFDocument.load(sourceBody);
+  const pageCount = source.getPageCount();
+  const pages = [];
+
+  for (let index = 0; index < pageCount; index += 1) {
+    const text = extractPdfPageText(source, index, pdfLib);
+    pages.push({
+      page: index + 1,
+      kind: kylPageKind(text)
+    });
+  }
+
+  return {
+    pageCount,
+    pages,
+    labelPages: pages.filter((page) => page.kind === 'label').map((page) => page.page),
+    coolingFreightPages: pages.filter((page) => page.kind === 'coolingFreight').map((page) => page.page),
+    frozenFreightPages: pages.filter((page) => page.kind === 'frozenFreight').map((page) => page.page),
+    unknownFreightPages: pages.filter((page) => page.kind === 'unknownFreight').map((page) => page.page)
+  };
 }
 
 export async function countPdfPages(body) {
@@ -197,51 +299,26 @@ export async function countPdfPages(body) {
 }
 
 export async function inferKylPalletLabelPages(body, options = {}) {
-  const hasCooling = boolFromQuery(options.hasCooling);
-  const hasFrozen = boolFromQuery(options.hasFrozen);
-  const pageCount = await countPdfPages(body);
-  return inferredKylLabelPages(pageCount, hasCooling, hasFrozen);
+  const analysis = await analyzeKylPalletPdf(body, options);
+  return analysis.labelPages.length;
 }
 
 export async function extractKylFreightSection(body, options = {}) {
   const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
-  const { PDFDocument } = await import('pdf-lib');
-  const source = await PDFDocument.load(sourceBody);
-  const pageCount = source.getPageCount();
   const section = String(options.section || '').trim();
-  const hasCooling = boolFromQuery(options.hasCooling);
-  const hasFrozen = boolFromQuery(options.hasFrozen);
-  const requestedLabelPages = Math.max(0, Math.min(pageCount, Math.trunc(Number(options.labelPages || 0)) || 0));
-  const labelPages = inferredKylLabelPages(pageCount, hasCooling, hasFrozen) || requestedLabelPages;
-  const freightIndices = Array.from(
-    { length: Math.max(0, pageCount - labelPages) },
-    (_, index) => labelPages + index
-  );
+  const analysis = await analyzeKylPalletPdf(sourceBody, options);
 
-  let indices = [];
+  let pages = [];
   if (section === 'coolingFreight' || section === 'frozenFreight') {
-    if (hasCooling && hasFrozen) {
-      if (freightIndices.length % 2 !== 0) {
-        throw new Error(`Cannot split Kyl freight pages: ${freightIndices.length} freight pages after ${labelPages} pallet pages.`);
-      }
-      const half = freightIndices.length / 2;
-      indices = section === 'coolingFreight'
-        ? freightIndices.slice(0, half)
-        : freightIndices.slice(half);
-    } else if (section === 'coolingFreight' && hasCooling) {
-      indices = freightIndices;
-    } else if (section === 'frozenFreight' && hasFrozen) {
-      indices = freightIndices;
-    }
+    pages = section === 'coolingFreight'
+      ? analysis.coolingFreightPages
+      : analysis.frozenFreightPages;
   } else if (section === 'remainingFreight') {
-    indices = freightIndices;
+    pages = [...analysis.coolingFreightPages, ...analysis.frozenFreightPages, ...analysis.unknownFreightPages]
+      .sort((left, right) => left - right);
   } else {
     throw new Error(`Unknown Kyl freight section: ${section || 'none'}`);
   }
 
-  if (indices.length === 0) {
-    throw new Error(`No pages found for Kyl freight section ${section}.`);
-  }
-
-  return extractPdfPageIndices(sourceBody, indices);
+  return extractPdfPageIndices(sourceBody, requirePages(pages, section).map((page) => page - 1));
 }

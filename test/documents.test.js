@@ -210,7 +210,12 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
       freightConsignmentFrozen: 'FROZ456',
       freightConsignmentNumbers: ['COOL123', 'FROZ456'],
       freightPalletCopies: 1,
-      palletDocumentRequired: true
+      palletDocumentRequired: true,
+      kylPalletPageGroups: {
+        labelPages: [1, 2, 3],
+        coolingFreightPages: [4, 5],
+        frozenFreightPages: [6, 7, 8]
+      }
     }]
   ]));
 
@@ -220,6 +225,7 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
   assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
     'pallet-label-1',
     'pallet-label-2',
+    'pallet-label-3',
     'frozen-freight',
     'cooling-freight',
     'slip-attachment'
@@ -229,22 +235,14 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
     ['pallet'],
     ['pallet'],
     ['pallet'],
+    ['pallet'],
     ['packingSlip', 'attachment']
   ]);
   assert.equal(snapshots[0].documents[0].pages, '1');
   assert.equal(snapshots[1].documents[0].pages, '2');
-  assert.deepEqual(snapshots[2].documents[0].kylSection, {
-    section: 'frozenFreight',
-    labelPages: 2,
-    hasCooling: true,
-    hasFrozen: true
-  });
-  assert.deepEqual(snapshots[3].documents[0].kylSection, {
-    section: 'coolingFreight',
-    labelPages: 2,
-    hasCooling: true,
-    hasFrozen: true
-  });
+  assert.equal(snapshots[2].documents[0].pages, '3');
+  assert.equal(snapshots[3].documents[0].pages, '6-8');
+  assert.equal(snapshots[4].documents[0].pages, '4-5');
 });
 
 test('requires visible freight documents even without freight context', () => {
