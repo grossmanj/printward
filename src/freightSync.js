@@ -54,7 +54,7 @@ function palletCopiesFromRow(row, fields = ['Val2', 'Val3', 'Val5', 'Val6']) {
 function isPalletDocumentRequired(shipment, config = {}) {
   if (shipment.palletDocumentRequired === false) return false;
   if (shipment.palletDocumentRequired === true) return true;
-  if (Number(shipment.freightPalletCopies || 0) <= 0) return false;
+  if ((shipment.consignments || []).length === 0) return false;
   const distributorNames = normalizedNameSet(config.palletDocumentDistributors || []);
   return distributorNames.has(normalizeName(shipment.distributorName));
 }
@@ -91,7 +91,8 @@ function normalizeShipment(row, config = {}) {
     freightPalletCopies: Math.max(0, palletCopiesFromRow(row, config.palletCopyFields)),
     palletDocumentRequired: isPalletDocumentRequired({
       distributorName: String(row.DistributorName || '').trim(),
-      freightPalletCopies: Math.max(0, palletCopiesFromRow(row, config.palletCopyFields))
+      freightPalletCopies: Math.max(0, palletCopiesFromRow(row, config.palletCopyFields)),
+      consignments
     }, config)
   };
 }

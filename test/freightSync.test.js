@@ -105,7 +105,7 @@ test('skips existing freight PDFs before calling nShift', async () => {
   assert.equal(result.results[1].uploaded, true);
 });
 
-test('syncs pallet documents for Kyl och Frysexpressen shipments with pallet copies', async () => {
+test('syncs pallet documents for Kyl och Frysexpressen shipments with booked consignments', async () => {
   const calls = [];
   const config = {
     nshift: {
@@ -122,7 +122,7 @@ test('syncs pallet documents for Kyl och Frysexpressen shipments with pallet cop
       {
         orderNumber: '1001',
         distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
-        freightPalletCopies: 3,
+        freightPalletCopies: 0,
         consignments: [{ kind: 'fresh', consignmentNo: 'FRESH1' }]
       }
     ],
@@ -144,7 +144,7 @@ test('syncs pallet documents for Kyl och Frysexpressen shipments with pallet cop
   assert.equal(calls[1].options.printType, 2);
   assert.equal(result.results[0].objectName, 'freight/9992/freight1001.pdf');
   assert.equal(result.results[0].palletObjectName, 'freight/9992/pallet1001.pdf');
-  assert.equal(result.results[0].palletCopies, 3);
+  assert.equal(result.results[0].palletCopies, 0);
   assert.equal(result.results[0].palletSkipped, true);
 });
 
@@ -169,7 +169,7 @@ test('backfills missing pallet PDFs without refetching existing freight PDFs', a
       {
         orderNumber: '1001',
         distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
-        freightPalletCopies: 2,
+        freightPalletCopies: 0,
         consignments: [{ kind: 'fresh', consignmentNo: 'FRESH1' }]
       }
     ],

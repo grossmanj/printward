@@ -156,6 +156,57 @@ test('SQL order context marks external distributors as freight-required', async 
   }]);
 });
 
+test('SQL order context requires Kyl pallet bundle even when pallet count is zero', async () => {
+  const client = new SqlServerOrderContextClient({
+    maxOrdersPerQuery: 500,
+    freightBookedStatuses: [2, 8]
+  });
+
+  client.getSql = async () => ({ Int: 'Int' });
+  client.getPool = async () => ({
+    request() {
+      return {
+        input() {},
+        async query() {
+          return {
+            recordsets: [
+              [{
+                OrdNo: 1962425,
+                CustNo: 456,
+                Nm: 'Customer AB',
+                CustomerName: 'Customer AB',
+                SupNo: 789,
+                DistributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+                DelDt: 20260707,
+                DelPri: 12,
+                DelMt: 5,
+                TrTp: 1,
+                OrdTp: 1,
+                OrdPrSt: 8,
+                FreightRequired: 1,
+                FreightConsignmentFresh: '0065247256',
+                FreightVal2: 0,
+                FreightVal3: 0,
+                FreightVal5: 0,
+                FreightVal6: 0
+              }],
+              [],
+              [],
+              []
+            ]
+          };
+        }
+      };
+    }
+  });
+
+  const contexts = await client.fetchBatch([1962425]);
+  const context = contexts.get('1962425');
+
+  assert.equal(context.freightPalletCopies, 0);
+  assert.equal(context.palletDocumentRequired, true);
+});
+
 test('SQL order context treats Best Transport as freight-optional for now', async () => {
   const client = new SqlServerOrderContextClient({
     maxOrdersPerQuery: 500,

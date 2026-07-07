@@ -166,7 +166,7 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
   const palletDocumentRequired = typeof explicitPalletRequired === 'boolean'
     ? explicitPalletRequired
     : freightRequired
-      && freightPalletCopies > 0
+      && freightConsignmentNumbers.length > 0
       && isPalletDocumentDistributor(
         distributorName,
         options.palletDocumentDistributors || row.palletDocumentDistributors
