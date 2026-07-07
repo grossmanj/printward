@@ -186,10 +186,12 @@ test('requires pallet documents for Kyl och Frysexpressen orders with reported p
   const required = applyDocumentRequirements(orders, ['pallet', 'packingSlip', 'attachment', 'freight']);
   const byOrder = new Map(required.map((order) => [order.orderNumber, order]));
   assert.deepEqual(byOrder.get('1001').missingTypes, ['pallet']);
+  assert.deepEqual(byOrder.get('1001').requiredTypes, ['pallet', 'packingSlip', 'attachment']);
   assert.deepEqual(byOrder.get('1002').missingTypes, []);
+  assert.deepEqual(byOrder.get('1002').requiredTypes, ['pallet', 'packingSlip', 'attachment']);
 
   const snapshot = orderToPrintSnapshot(byOrder.get('1002'), ['pallet', 'packingSlip', 'attachment', 'freight']);
-  assert.deepEqual(snapshot.documents.map((document) => document.type), ['pallet', 'packingSlip', 'attachment', 'freight']);
+  assert.deepEqual(snapshot.documents.map((document) => document.type), ['pallet', 'packingSlip', 'attachment']);
   assert.equal(snapshot.documents[0].pageCopies, 2);
 });
 

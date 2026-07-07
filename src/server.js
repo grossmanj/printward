@@ -674,6 +674,13 @@ function expectedDocumentLookups(config, orderNumbers) {
       });
     }
 
+    if (visible.has('pallet') && config.freightGcs?.bucket) {
+      lookups.push({
+        source: 'freight',
+        name: prefixedObjectName(config.freightGcs.prefix, `pallet${orderNumber}.pdf`)
+      });
+    }
+
     if (visible.has('freight') && config.freightGcs?.bucket) {
       lookups.push({
         source: 'freight',

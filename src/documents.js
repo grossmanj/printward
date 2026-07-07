@@ -153,8 +153,11 @@ function requiresPalletDocument(order) {
 }
 
 function requiredTypesForOrder(order, requiredTypes = DOCUMENT_ORDER) {
+  const palletDocumentCoversFreight = requiresPalletDocument(order);
+
   return normalizedDocumentTypes(requiredTypes).filter((type) => {
     if (type === 'pallet') return requiresPalletDocument(order);
+    if (type === 'freight' && palletDocumentCoversFreight) return false;
     if (type !== 'freight') return true;
     return Boolean(order.context?.freightRequired || order.documents?.freight);
   });
@@ -258,6 +261,7 @@ export function summarizeOrders(orders, options = {}) {
   };
 
   for (const order of orders) {
+    const requiredForOrder = new Set(order.requiredTypes || countedTypes);
     const packingBlocked = hasPackingLeft(order);
     if (isOrderReady(order)) summary.readyOrders += 1;
     if (order.missingTypes.length > 0) summary.missingOrders += 1;
@@ -267,6 +271,7 @@ export function summarizeOrders(orders, options = {}) {
     if (order.packetStatus === 'reprint') summary.reprintOrders += 1;
 
     for (const type of countedTypes) {
+      if (!requiredForOrder.has(type)) continue;
       const document = order.documents[type];
       if (document && document.printStatus !== 'printed') summary.pendingDocuments += 1;
     }
@@ -375,11 +380,13 @@ export function orderToPrintSnapshot(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
   const freightPageCopies = freightPageCopiesForOrder(order);
   const palletPageCopies = palletPageCopiesForOrder(order);
+  const palletDocumentCoversFreight = requiresPalletDocument(order);
   return {
     orderNumber: order.orderNumber,
     missingTypes: order.missingTypes.filter((type) => selected.has(type)),
     documents: DOCUMENT_ORDER
       .filter((type) => selected.has(type))
+      .filter((type) => !(type === 'freight' && palletDocumentCoversFreight))
       .map((type) => order.documents[type])
       .filter(Boolean)
       .map((document) => ({

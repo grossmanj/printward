@@ -758,6 +758,7 @@ function renderOrders() {
     for (const order of group.orders) {
       const chips = Object.values(state.documentTypes)
         .sort((left, right) => left.order - right.order)
+        .filter((type) => (order.requiredTypes || []).includes(type.key))
         .map((type) => documentChip(order, type, order.documents[type.key]))
         .join('');
 
