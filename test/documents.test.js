@@ -4,8 +4,11 @@ import test from 'node:test';
 import {
   applyDocumentRequirements,
   buildOrders,
+  canPrintExternalFreightEarly,
   classifyObject,
+  documentTypesForPrintOrder,
   filterOrders,
+  isPrintBlockedByPacking,
   orderToPrintSnapshot,
   orderToPrintSnapshots,
   summarizeDispatchCombos,
@@ -299,6 +302,73 @@ test('blocks document printing while warehouse packing is left', () => {
     needsPrintCombos: 0,
     printedCombos: 0
   });
+});
+
+test('allows external freight documents to print while warehouse packing is left', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'pallet1001.pdf', updated: '2026-06-24T08:02:00.000Z', generation: '3' }
+  ]), new Map([
+    ['1001', {
+      distributorNo: 123,
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      freightRequired: true,
+      freightConsignmentFresh: 'COOL123',
+      freightConsignmentNumbers: ['COOL123'],
+      palletDocumentRequired: true,
+      packingBlocked: true,
+      packingLinesLeft: 3,
+      kylPalletPageGroups: {
+        labelPages: [1, 2],
+        coolingFreightPages: [3, 4],
+        frozenFreightPages: []
+      }
+    }]
+  ]));
+
+  const required = applyDocumentRequirements(orders, ['pallet', 'packingSlip', 'attachment', 'freight']);
+  const printTypes = documentTypesForPrintOrder(required[0], ['pallet', 'packingSlip', 'attachment', 'freight']);
+  const snapshots = orderToPrintSnapshots(required[0], printTypes);
+
+  assert.equal(required[0].packingBlocked, true);
+  assert.equal(required[0].packetStatus, 'blocked');
+  assert.deepEqual(required[0].missingTypes, ['packingSlip', 'attachment']);
+  assert.equal(canPrintExternalFreightEarly(required[0]), true);
+  assert.equal(isPrintBlockedByPacking(required[0]), false);
+  assert.deepEqual(printTypes, ['pallet']);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
+    'pallet-label-1',
+    'pallet-label-2',
+    'cooling-freight'
+  ]);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.type)), [
+    ['pallet'],
+    ['pallet'],
+    ['pallet']
+  ]);
+});
+
+test('keeps external packing-left orders blocked until freight documents are ready', () => {
+  const orders = attachOrderContexts(buildOrders([
+    { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
+    { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' }
+  ]), new Map([
+    ['1001', {
+      distributorNo: 123,
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      freightRequired: true,
+      freightConsignmentFresh: 'COOL123',
+      freightConsignmentNumbers: ['COOL123'],
+      palletDocumentRequired: true,
+      packingBlocked: true,
+      packingLinesLeft: 3
+    }]
+  ]));
+
+  const required = applyDocumentRequirements(orders, ['pallet', 'packingSlip', 'attachment', 'freight']);
+
+  assert.deepEqual(required[0].missingTypes, ['pallet']);
+  assert.equal(canPrintExternalFreightEarly(required[0]), false);
+  assert.equal(isPrintBlockedByPacking(required[0]), true);
 });
 
 test('filters orders by SQL context fields', () => {

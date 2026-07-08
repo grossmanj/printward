@@ -121,6 +121,41 @@ function isOrderReady(order) {
   return order.missingTypes.length === 0 && !hasPackingLeft(order);
 }
 
+function isExternalDistributionOrder(order) {
+  const context = order.context || {};
+  return Number(context.distributorNo || 0) > 0
+    && Boolean(context.freightRequired || context.palletDocumentRequired || order.documents?.pallet || order.documents?.freight);
+}
+
+function requiredFreightDocumentTypes(order) {
+  const requiredTypes = new Set(order.requiredTypes || requiredTypesForOrder(order));
+  if (requiredTypes.has('pallet')) return ['pallet'];
+  if (requiredTypes.has('freight')) return ['freight'];
+  if (order.documents?.pallet) return ['pallet'];
+  if (order.documents?.freight) return ['freight'];
+  return [];
+}
+
+export function canPrintExternalFreightEarly(order) {
+  if (!hasPackingLeft(order)) return false;
+  if (!isExternalDistributionOrder(order)) return false;
+
+  const freightTypes = requiredFreightDocumentTypes(order);
+  return freightTypes.length > 0 && freightTypes.every((type) => Boolean(order.documents?.[type]));
+}
+
+export function isPrintBlockedByPacking(order) {
+  return hasPackingLeft(order) && !canPrintExternalFreightEarly(order);
+}
+
+export function documentTypesForPrintOrder(order, selectedTypes = DOCUMENT_ORDER) {
+  const normalized = normalizedDocumentTypes(selectedTypes);
+  if (!canPrintExternalFreightEarly(order)) return normalized;
+
+  const freightTypes = new Set(requiredFreightDocumentTypes(order));
+  return normalized.filter((type) => freightTypes.has(type));
+}
+
 function getPacketStatus(documents, missingTypes, requiredTypes = DOCUMENT_ORDER, packingBlocked = false) {
   const existing = DOCUMENT_ORDER.map((type) => documents[type]).filter(Boolean);
   const statuses = existing

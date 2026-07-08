@@ -18,7 +18,9 @@ import {
   DOCUMENT_TYPES,
   applyDocumentRequirements,
   buildOrders,
+  documentTypesForPrintOrder,
   filterOrders,
+  isPrintBlockedByPacking,
   orderToPrintSnapshots,
   summarizeDispatchCombos,
   summarizeOrders
@@ -596,7 +598,7 @@ async function buildPrintSnapshots(storage, orders, selectedTypes, options = {})
 
   if (!options.includeComboSeparators) {
     return printableOrders
-      .flatMap((order) => orderToPrintSnapshots(order, selectedTypes))
+      .flatMap((order) => orderToPrintSnapshots(order, documentTypesForPrintOrder(order, selectedTypes)))
       .filter((order) => order.documents.length > 0);
   }
 
@@ -618,7 +620,7 @@ async function buildPrintSnapshots(storage, orders, selectedTypes, options = {})
   const snapshots = [];
   groups.forEach((group, index) => {
     const orderSnapshots = group.orders
-      .flatMap((order) => orderToPrintSnapshots(order, selectedTypes))
+      .flatMap((order) => orderToPrintSnapshots(order, documentTypesForPrintOrder(order, selectedTypes)))
       .filter((order) => order.documents.length > 0);
     if (orderSnapshots.length === 0) return;
     snapshots.push(createComboSeparatorSnapshot(group.separatorOrder, index + 1));
@@ -1149,11 +1151,11 @@ async function handleApi(req, res, requestUrl, context) {
     const byOrderNumber = new Map(orders.map((order) => [order.orderNumber, order]));
     const packingBlockedOrders = orderNumbers
       .map((orderNumber) => byOrderNumber.get(orderNumber))
-      .filter((order) => order && (order.packingBlocked || order.context?.packingBlocked || Number(order.context?.packingLinesLeft || 0) > 0));
+      .filter((order) => order && isPrintBlockedByPacking(order));
 
     if (packingBlockedOrders.length > 0) {
       sendJson(res, 409, {
-        error: 'One or more selected orders still have warehouse packing left.',
+        error: 'One or more selected orders still have warehouse packing left and no ready freight documents.',
         blockedOrders: packingBlockedOrders.map((order) => ({
           orderNumber: order.orderNumber,
           packingDepartments: order.context?.packingDepartments || []

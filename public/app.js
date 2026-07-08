@@ -289,6 +289,37 @@ function hasPackingLeft(order = {}) {
   return Boolean(order.packingBlocked || context.packingBlocked || Number(context.packingLinesLeft || 0) > 0);
 }
 
+function isExternalDistributionOrder(order = {}) {
+  const context = order.context || {};
+  return Number(context.distributorNo || 0) > 0
+    && Boolean(context.freightRequired || context.palletDocumentRequired || order.documents?.pallet || order.documents?.freight);
+}
+
+function requiredFreightDocumentTypes(order = {}) {
+  const requiredTypes = new Set(order.requiredTypes || []);
+  if (requiredTypes.has('pallet')) return ['pallet'];
+  if (requiredTypes.has('freight')) return ['freight'];
+  if (order.documents?.pallet) return ['pallet'];
+  if (order.documents?.freight) return ['freight'];
+  return [];
+}
+
+function canPrintExternalFreightEarly(order = {}) {
+  if (!hasPackingLeft(order)) return false;
+  if (!isExternalDistributionOrder(order)) return false;
+
+  const freightTypes = requiredFreightDocumentTypes(order);
+  return freightTypes.length > 0 && freightTypes.every((type) => Boolean(order.documents?.[type]));
+}
+
+function isPrintBlockedByPacking(order = {}) {
+  return hasPackingLeft(order) && !canPrintExternalFreightEarly(order);
+}
+
+function isMissingBlockedForPrint(order = {}) {
+  return (order.missingTypes || []).length > 0 && !canPrintExternalFreightEarly(order);
+}
+
 function packingLeftText(context = {}) {
   const departments = (context.packingDepartments || [])
     .filter((department) => Number(department.linesLeft || 0) > 0 || Number(department.quantityLeft || 0) !== 0)
@@ -514,6 +545,9 @@ function summarizeGroup(orders) {
     readyOrders: 0,
     missingOrders: 0,
     blockedOrders: 0,
+    printBlockedOrders: 0,
+    printMissingOrders: 0,
+    earlyFreightOrders: 0,
     pendingOrders: 0,
     reprintOrders: 0,
     printedOrders: 0,
@@ -525,14 +559,19 @@ function summarizeGroup(orders) {
 
   for (const order of orders) {
     const packingBlocked = hasPackingLeft(order);
+    const earlyFreightPrintable = canPrintExternalFreightEarly(order);
     if (order.missingTypes.length === 0 && !packingBlocked) summary.readyOrders += 1;
     if (order.missingTypes.length > 0) summary.missingOrders += 1;
     if (packingBlocked) summary.blockedOrders += 1;
+    if (earlyFreightPrintable) summary.earlyFreightOrders += 1;
+    if (isPrintBlockedByPacking(order)) summary.printBlockedOrders += 1;
+    if (isMissingBlockedForPrint(order)) summary.printMissingOrders += 1;
     if (order.packetStatus === 'pending') summary.pendingOrders += 1;
     if (order.packetStatus === 'reprint') summary.reprintOrders += 1;
     if (order.packetStatus === 'printed') summary.printedOrders += 1;
-    summary.missingDocuments += order.missingTypes.length;
-    for (const typeKey of order.missingTypes) summary.missingLabels.add(documentTypeLabel(typeKey));
+    const missingTypesForPrint = earlyFreightPrintable ? [] : order.missingTypes;
+    summary.missingDocuments += missingTypesForPrint.length;
+    for (const typeKey of missingTypesForPrint) summary.missingLabels.add(documentTypeLabel(typeKey));
 
     for (const document of Object.values(order.documents || {})) {
       if (document.printStatus !== 'printed') summary.pendingDocuments += 1;
@@ -543,24 +582,32 @@ function summarizeGroup(orders) {
     }
   }
 
-  summary.canPrint = summary.total > 0 && summary.missingOrders === 0 && summary.blockedOrders === 0;
+  summary.canPrint = summary.total > 0 && summary.printMissingOrders === 0 && summary.printBlockedOrders === 0;
   return summary;
 }
 
 function groupReadiness(summary) {
-  if (summary.blockedOrders > 0) {
+  if (summary.printBlockedOrders > 0) {
     return {
       key: 'blocked',
       label: 'Packing left',
-      detail: `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} not packed`
+      detail: `${summary.printBlockedOrders} order${summary.printBlockedOrders === 1 ? '' : 's'} not packed`
     };
   }
 
-  if (summary.missingOrders > 0) {
+  if (summary.printMissingOrders > 0) {
     return {
       key: 'missing',
       label: 'Waiting for docs',
       detail: `${summary.missingDocuments} missing`
+    };
+  }
+
+  if (summary.earlyFreightOrders > 0) {
+    return {
+      key: 'pending',
+      label: 'Freight ready',
+      detail: `${summary.earlyFreightOrders} pallet/freight only`
     };
   }
 
@@ -629,13 +676,13 @@ function renderGroupRow(group) {
   const isExpanded = state.expandedGroups.has(group.id);
   const isBusy = Boolean(state.activePrint) || state.ordersLoading;
   const isActiveGroup = state.activePrint?.type === 'group' && state.activePrint.groupId === group.id;
-  const blockedText = summary.blockedOrders > 0
-    ? `${summary.blockedOrders} order${summary.blockedOrders === 1 ? '' : 's'} still have warehouse packing left`
+  const blockedText = summary.printBlockedOrders > 0
+    ? `${summary.printBlockedOrders} order${summary.printBlockedOrders === 1 ? '' : 's'} still have warehouse packing left and no ready freight documents`
     : '';
   const missingText = summary.missingLabels.size > 0
     ? `Missing ${Array.from(summary.missingLabels).slice(0, 3).join(', ')}`
     : 'No missing documents';
-  const disabledText = [blockedText, summary.missingOrders > 0 ? missingText : ''].filter(Boolean).join('. ');
+  const disabledText = [blockedText, summary.printMissingOrders > 0 ? missingText : ''].filter(Boolean).join('. ');
   const defaultPrintLabel = summary.printedOrders === summary.total ? `Reprint ${actionName}` : `Print ${actionName}`;
   const printLabel = isActiveGroup ? printStageText(state.activePrint.stage) : defaultPrintLabel;
   const disabled = summary.canPrint && !isBusy ? '' : 'disabled';
@@ -794,13 +841,14 @@ function renderOrders() {
         ? `Packer: ${context.packerName}${context.packerNo ? ` (#${context.packerNo})` : ''}`
         : '';
       const note = context.orderNote ? `<small class="context-note">${escapeHtml(context.orderNote)}</small>` : '';
-      const printBlocked = hasPackingLeft(order);
+      const printBlocked = isPrintBlockedByPacking(order);
+      const earlyFreightPrintable = canPrintExternalFreightEarly(order);
       const isBusy = Boolean(state.activePrint);
       const isActiveOrder = state.activePrint?.type === 'order' && state.activePrint.orderNumber === order.orderNumber;
       const rowPrintLabel = isActiveOrder ? printStageText(state.activePrint.stage) : 'Print';
       const rowPrintTitle = printBlocked
         ? ` title="${escapeHtml(`Packing left: ${packingText}`)}"`
-        : (isBusy && !isActiveOrder ? ' title="Another print job is processing"' : '');
+        : (isBusy && !isActiveOrder ? ' title="Another print job is processing"' : (earlyFreightPrintable ? ' title="Prints pallet/freight documents only while packing remains"' : ''));
       const rowPrintDisabled = printBlocked || isBusy ? ' disabled' : '';
       const rowPrintBusyClass = isActiveOrder ? ' is-busy' : '';
 
@@ -1206,16 +1254,16 @@ async function createPrintJob(orderNumbers, options = {}) {
 
 function confirmIncompletePackets(orderNumbers) {
   const selected = new Set(orderNumbers);
-  const blocked = state.orders.filter((order) => selected.has(order.orderNumber) && hasPackingLeft(order));
+  const blocked = state.orders.filter((order) => selected.has(order.orderNumber) && isPrintBlockedByPacking(order));
   if (blocked.length > 0) {
     const details = blocked.slice(0, 4)
       .map((order) => `${order.orderNumber}: ${packingLeftText(order.context) || 'packing left'}`)
       .join('\n');
-    window.alert(`${blocked.length} selected order packet(s) still have warehouse packing left and cannot be printed yet.\n\n${details}`);
+    window.alert(`${blocked.length} selected order packet(s) still have warehouse packing left and no ready freight documents.\n\n${details}`);
     return false;
   }
 
-  const incomplete = state.orders.filter((order) => selected.has(order.orderNumber) && order.missingTypes.length > 0);
+  const incomplete = state.orders.filter((order) => selected.has(order.orderNumber) && isMissingBlockedForPrint(order));
   if (incomplete.length === 0) return true;
 
   const missingDocuments = incomplete.reduce((total, order) => total + order.missingTypes.length, 0);
