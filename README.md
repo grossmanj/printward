@@ -11,6 +11,10 @@ It groups PDFs by order number:
 
 The app shows whether each current document version has been printed. If a PDF is updated in the bucket after printing, it returns to a reprint-needed state.
 
+For development and agent continuity, start with [AGENTS.md](AGENTS.md) and the
+[agent handoff](docs/agent-handoff.md). The handoff records current business rules,
+architecture, test coverage, and operational details that must survive between tasks.
+
 ## Why there is a local print agent
 
 Browsers do not provide a reliable API for selecting a locally installed printer, silently printing, or enabling printer finishing features such as stapling. Printward therefore has two parts:
@@ -22,9 +26,11 @@ Without the local agent, users can still open PDFs from the web app and manually
 
 ## Run locally
 
-The app starts in mock mode if `GCS_BUCKET` is not set.
+Use Node.js 20 or newer and install the locked dependencies first. The app starts
+in mock mode if `GCS_BUCKET` is not set.
 
 ```sh
+npm ci
 npm run dev
 ```
 
@@ -79,7 +85,7 @@ Production uses the same bucket with:
 GCS_BUCKET=pdf-service-bucket GCS_PREFIX=2/ npm start
 ```
 
-Freight documents are not present in these prefixes yet. Until `FREIGHT_GCS_BUCKET` is configured, live mode treats only packing slips and packing slip attachments as required/visible documents.
+Freight sync writes to a separate prefix described below. Until `FREIGHT_GCS_BUCKET` is configured, live mode treats only packing slips and packing slip attachments as required/visible documents.
 
 For Cloud Run or another Google-hosted runtime with a service account:
 
@@ -106,7 +112,9 @@ FREIGHT_GCS_BUCKET=another-bucket-when-ready
 FREIGHT_GCS_PREFIX=freight-prefix/
 ```
 
-When freight PDFs are introduced in another bucket, set `FREIGHT_GCS_BUCKET` and optionally `FREIGHT_GCS_PREFIX`, then include `pallet` and `freight` in `REQUIRED_DOCUMENT_TYPES` and `VISIBLE_DOCUMENT_TYPES`.
+To enable freight PDFs, set `FREIGHT_GCS_BUCKET` (which can be the same bucket) and
+`FREIGHT_GCS_PREFIX`, then include `pallet` and `freight` in
+`REQUIRED_DOCUMENT_TYPES` and `VISIBLE_DOCUMENT_TYPES`.
 
 ## Sync nShift freight documents
 
@@ -116,10 +124,11 @@ The sync job:
 
 - Reads booked consignments from `FreeInf1` where `InfCatNo = 8376`, `FrInfTp = 1213`, `FrInfTp2 = 2386`, `FrInfTp3 = 5325`, and `Val1 IN (2, 8)`.
 - Uses `FreeInf1.Txt1` and `FreeInf1.Txt2` as fresh/chilled and frozen consignment numbers.
-- Uses `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as the reported pallet/half-pallet count for pallet document copies.
+- Reads `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as reported pallet/half-pallet count metadata; these counts do not control PDF page duplication.
 - Calls nShift `ConsignmentWS.printWaybill` for each consignment number.
 - Merges multiple PDFs into one `freight{OrdNo}.pdf`.
-- For `Kyl- och Frysexpressen Mälardalen AB` orders with reported pallets, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`.
+- For `Kyl- och Frysexpressen Mälardalen AB` orders with booked consignments, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`, including when reported pallet counts are zero.
+- Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
 
 Default demo output:
@@ -139,7 +148,10 @@ REQUIRED_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
 VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
 ```
 
-`pallet` is conditional in the UI: it is required only when the SQL order context says the distributor matches `NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS` and the pallet copy count is greater than zero. Defaults:
+`pallet` is conditional in the UI: SQL context requires it for a matching external
+distributor with booked consignment numbers, even when reported pallet counts are
+zero. An existing pallet PDF also makes it required. The pallet bundle covers
+freight, so a separate freight PDF is excluded from the print packet. Defaults:
 
 ```text
 NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS=Kyl- och Frysexpressen Mälardalen AB
@@ -156,7 +168,9 @@ printf '%s' 'group-name' | gcloud secrets create NSHIFT_GROUP_NAME --project vis
 printf '%s' 'password' | gcloud secrets create NSHIFT_PASSWORD --project visma-274514 --data-file=-
 ```
 
-The credentials that were pasted into this thread should be rotated before production use.
+Earlier project documentation recorded nShift credentials exposed in a prior
+conversation. Confirm they have been rotated before production use; rotation
+status is not recorded in this repository.
 
 The Cloud Run job service account needs:
 
@@ -216,6 +230,9 @@ bash scripts/deploy-freight-sync-job.sh
 
 The job refuses production nShift calls unless `NSHIFT_ALLOWED_ORDER_NUMBERS`, `NSHIFT_ALLOWED_CONSIGNMENT_NUMBERS`, or `NSHIFT_ALLOW_ALL=true` is set.
 
+`NSHIFT_SYNC_DRY_RUN=true` suppresses GCS uploads, but **still calls nShift when
+fetching is enabled**. Keep `NSHIFT_FETCH_ENABLED=false` for a no-call preview.
+
 Cloud Run Job retries are disabled for the freight sync. nShift's waybill endpoint may be stateful, so a failed GCS upload must not automatically trigger another nShift print request.
 
 ## Configure Cloud SQL order context
@@ -242,6 +259,7 @@ npm start
 Equivalent split variables are also supported:
 
 ```text
+ORDER_CONTEXT_MODE=sqlserver
 SQLSERVER_HOST=10.x.x.x
 SQLSERVER_PORT=1433
 SQLSERVER_DATABASE=F0002
@@ -290,13 +308,38 @@ SERVICE=printward GCS_PREFIX=2/ SQLSERVER_DATABASE=F0002 bash scripts/deploy-clo
 
 The script attaches the existing Cloud Run service account `webshop-api@visma-274514.iam.gserviceaccount.com`, the VPC connector `connector-cloudrun-sql`, and injects `SQL_UID` / `SQL_PWD` from Secret Manager as SQL credentials.
 
-It defaults to authenticated-only Cloud Run access. Set `ALLOW_UNAUTHENTICATED=true` only if the service should be public.
+It defaults to authenticated-only Cloud Run access. For public ingress protected
+by Printward's own login, set `ALLOW_UNAUTHENTICATED=true` and
+`PRINTWARD_LOGIN_PASSWORD_SECRET` to a Secret Manager secret name; the script then
+enables app login. Optionally set `PRINTWARD_SESSION_SECRET_SECRET` for a separate
+session signing secret and `PRINTWARD_LOGIN_USER` for the username.
+
+Cloud Run IAM authentication and Printward app login are separate. The local print
+agent uses job-scoped tokens for documents and completion, but does not acquire
+Google IAM identity tokens. Verify the intended access path for the deployed service.
 
 Printward uses Datastore mode for Cloud Run state when `STATE_STORE=datastore`; local development still defaults to the JSON file under `data/`.
 
+Script defaults are not a record of deployed state. Review existing environment
+variables and secrets before redeploying: the scripts use replacement flags, and
+the web script sets Datastore namespace `printward` for both demo and production.
+See the [handoff](docs/agent-handoff.md#environment-and-operational-context) for
+environment isolation and release considerations.
+
 ## Printing behavior
 
-On macOS and Linux, the local agent uses CUPS `lp`. It prints one CUPS job per order with all selected PDFs attached to that job, so printers that support per-job stapling can staple each order packet.
+Packing left normally blocks printing. External distributor orders can print
+available pallet/freight documents early while packing continues; slips and
+attachments are excluded until packing is complete. This does not make the entire
+order ready. Best Transport is normally freight-optional; DB Schenker Finland
+International receives four consecutive copies of each freight page.
+
+On macOS and Linux, the local agent uses CUPS `lp`. Normal orders print as one CUPS
+job with all selected PDFs attached, so printers that support per-job stapling can
+staple each order packet. Kyl pallet bundles are split into separate jobs: each
+label page, frozen freight, cooling freight, and slip plus attachment. The server
+classifies the PDF pages dynamically and rejects missing or unrecognized freight
+sections rather than assuming fixed page offsets.
 
 The default staple option is:
 
@@ -306,7 +349,16 @@ StapleLocation=UpperLeft
 
 Printer finishing options vary by driver. Change the staple option in Settings to match the local printer's CUPS option.
 
-On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each order packet into one PDF before printing and sends one print job per order. SumatraPDF can set common options such as copies, collation, duplex, color mode, tray, and paper size, but stapling is controlled by the Windows printer driver. For stapling, create or select a Windows printer queue whose driver preferences already enable the wanted finisher/staple mode, for example an `MP C4504 Staple` queue.
+On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each normal order packet or Kyl section into one PDF and sends a separate print job for each. SumatraPDF can set common options such as copies, collation, duplex, color mode, tray, and paper size, but stapling is controlled by the Windows printer driver. For stapling, create or select a Windows printer queue whose driver preferences already enable the wanted finisher/staple mode, for example an `MP C4504 Staple` queue.
+
+The Windows installer downloads this repository's `main` branch. Rerun it to update
+an installed agent; pushing to GitHub or deploying Cloud Run does not update PCs.
+
+Print history supports retrying the original packet snapshot, including its GCS
+generations and section boundaries. Retry can fail if old generations are no longer
+available. To print current document versions, start a new print action. Combo
+printing can include delivery-method separator pages, and the browser receives job
+updates through `/api/events`.
 
 ## API
 
@@ -315,7 +367,11 @@ Useful endpoints:
 ```text
 GET  /api/orders
 GET  /api/orders/:orderNumber
+GET  /api/health
+GET  /api/events
+GET  /api/print-jobs
 POST /api/print-jobs
+POST /api/print-jobs/:id/retry
 GET  /api/print-jobs/:id/manifest
 POST /api/print-jobs/:id/complete
 GET  /api/documents?name=objectName&source=primary
