@@ -471,3 +471,22 @@ are verification needs, not claims that the running system is broken.
   needed before creating the repository link and `^demo$` trigger. No demo
   deployment has occurred yet. `printward-prod`, freight jobs, schedulers,
   and the local print agent remain unchanged.
+- The dashboard and `cloudbuild.demo.yaml` were committed locally on `demo`
+  as `51a5aa5dabfdfcccea5354b9e09832cfbc9a637b`. The normal
+  `git push -u origin demo` did **not** succeed: Git reported `could not read
+  Username for 'https://github.com': Device not configured`. A separate
+  batch-mode SSH check reported `Permission denied (publickey)`. Configure
+  GitHub push authentication on this computer, then push normally and verify
+  `refs/heads/demo` with `git ls-remote`; do not force-push. This local commit
+  is not yet on GitHub, and no trigger/build/revision/health check has been
+  validated. The Google OAuth authorizer and local Git push credentials are
+  independent blockers.
+- Production automation is a separate release decision. The repository's
+  default branch is `main` (not `master`); no Printward Cloud Build trigger or
+  GitHub workflow was found during the prior inspection, and the current
+  production revision came from `gcloud` source deploy with automatic updates
+  disabled. Future PR-merge deployment requires an explicitly reviewed
+  `^main$` trigger/workflow, production-scoped build identity and image
+  repository, a production configuration snapshot/preservation plan, and
+  separate rollout/health/print-path validation. None of that is configured
+  by the demo work.

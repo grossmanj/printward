@@ -420,6 +420,9 @@ Printward production trigger was found in this project's global,
 merge-to-master production deployment without verifying the owner's actual
 pipeline. The current `printward-demo` service still points at demo Visma
 `F9992` and GCS prefix `9992/`; it has **not yet** been switched to live data.
+The local `demo` branch is also not on GitHub yet: this computer currently
+lacks GitHub credentials for a normal push. Its local commit and the exact
+pre-deployment service settings are recorded in the handoff.
 
 Demo defaults:
 
