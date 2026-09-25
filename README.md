@@ -40,6 +40,105 @@ Open:
 http://127.0.0.1:3100
 ```
 
+The staged, read-only dashboard prototype is at
+`http://127.0.0.1:3100/printward-dashboard.html`. Its five freight panels now use
+`GET /api/dashboard/freight?deliveryDate=YYYY-MM-DD` to group orders by route and
+carrier, count available freight documents, and show order/booking details. Best
+Transport and other carriers show departures only; none of these dashboard
+buttons starts a print job.
+The date picker uses the Europe/Stockholm calendar date. Date-scoped SQL reads
+page through all matching order numbers in batches (including returns and
+pickups), rather than silently stopping after the first 500.
+The Eriksson panel is the Kyl & Frys supplier `7331697` with **order**
+`DelMt=25`; it uses the same document type and sorts by the order's `DelPri`.
+This classification does not alter nShift-generated PDFs or labels.
+Fictional local orders `900002` and `900003` on `2026-06-24` demonstrate
+Eriksson sorting (07:00 before 16:00).
+Fictional orders `900004` and `900005` on the same date exercise DSV Finland
+routes `47` and `48`. The existing four-copy freight rule is matched by
+supplier number `50063993`, so a change in supplier display name does not
+silently change the copy count.
+The Returer panel is also read-only and uses
+`GET /api/returns?deliveryDate=YYYY-MM-DD`: sales orders with `Ord.Gr3=30`
+(`Retur hämtas`) are counted regardless of `Ord.DelMt`, grouped by the order's
+`DelPri`; missing times remain unassigned. Cancelled orders are excluded.
+Returns are kept out of the regular order and pickup dashboards. This revised
+rule was locally tested and matched two visible Visma returns for 2026-09-24
+in the separate private, read-only live dashboard. Return printing remains
+disabled.
+`GET /api/pickups?deliveryDate=YYYY-MM-DD` reads customer pickups (`DelMt=6`),
+couriers (`16`), and taxis (`42`–`46`). Only a customer pickup whose
+`Actor.CPmtTrm=1` gets the Swish badge. The Tidig/FM/EM follow-slip cards use
+`GET /api/dashboard/dispatch?deliveryDate=YYYY-MM-DD`, grouped by the **order's**
+`DelPri` and confirmed own-car `DelMt` codes or a preliminary registration-text
+match. A card counts an order as ready only when its packing slip and attachment
+exist and packing is complete. These cards are also read-only. Sushi Yama
+(`Actor.R12=41`) and ChopChop (`Actor.R12=100`) use
+`GET /api/dashboard/chains?deliveryDate=YYYY-MM-DD` to show printed/total
+orders: both packing slip and attachment must have status `printed`. Their
+order lists remain read-only. The Other customers card waits for a verified
+`Actor.DocSmt` rule and shows no invented count. Personal orders are a separate
+fourth row within the pickup area (`Actor.R12=60`, `Ord.DelMt=6`). Esc closes
+read-only lookups and returns to the overview. In the default local
+configuration the source is mock data, not live Visma or nShift.
+
+Opening a Tidig/FM/EM card now allows selecting individual ready orders or all
+ready orders currently visible in the list. **Granska vald bunt** shows their
+existing `DelPri`/delivery-method order, with packing-slip and attachment
+statuses. Unready orders cannot be selected; changing the date, refreshing,
+switching departure, or submitting a new search clears the selection. This is
+an order-of-documents review, not a PDF preview or a print-job submission.
+The top **Sortera** menu now controls the Tidig/FM/EM, freight, and chain
+lookups with **Leveransprioritet** (the default) or **Körsätt**. Körsätt groups by the
+order's Visma `DelMt` number and keeps `DelPri` order within each method.
+This changes only the visible list; the server-validated freight review and
+the existing planned print/simulation order remain unchanged.
+Each overview card now separates its lookup action from a quick-print action.
+The quick-print buttons and **Skriv ut valda** controls are disabled by default
+in read-only mode; they do not submit jobs. The optional **Starta virtuell
+skrivare** test mode changes eligible controls to **Simulera utskrift** and
+records a session-only queue in the browser, without generating a print job,
+calling nShift, contacting a printer, or changing real printed status. Before
+confirmation and in **Visa testkö**, each order lists the intended document
+sequence: **Följesedel → Partibilaga** is marked as a planned stapled bundle;
+freight documents and labels are explicitly separate from packing slips.
+Simulation marks matching documents in own-car and chain views together, while
+real readiness counters stay unchanged. Kyl/DSV/Eriksson simulations require a
+successful read-only PDF preflight. Pickup/courier/staff actions are clearly
+marked as template-unverified intentions, not PDF output. Best Transport, other
+carriers, returns, and DocSmt-based customers remain disabled. **Rensa
+simulering** clears only the browser's test queue. Freight cards consistently say **Visa
+avgångar**. Order details provide read-only links to the exact available PDF
+generation for följesedel, partibilaga, fraktsedel, or the Kyl/Eriksson bundle.
+Chain and return lookups also support individual selection and a read-only
+selection review. Clicking a pickup row opens its details. Best Transport,
+other carriers, DocSmt-based customers, and return documents still lack
+verified print flows.
+
+The Kyl & Frys, DSV Finland, and Eriksson lookups likewise allow selecting
+orders with available freight documents and opening a read-only document-order
+review. `FreeInf1.Txt1` (chilled) and `Txt2` (frozen) appear on separate booking
+rows, while an order is selected and counted only once. Best Transport and
+Other carriers remain departure-only. The fictional mock order `900001` on
+`2026-06-24` demonstrates two bookings on one Kyl & Frys order. No freight
+selection starts printing or calls nShift.
+
+The review is checked again by `POST /api/dashboard/freight-plan` against the
+current date, carrier group, and document availability; it returns the sorted
+freight-only plan without creating a print job. The existing generic
+`/api/print-jobs` route can add required packing documents and must not be
+used directly for these freight-only dashboard buttons.
+
+A separate freight-only packet builder is now tested but deliberately not
+connected to print-job creation. It requires an unchanged document version and
+verified Kyl/Eriksson PDF page groups before creating label/waybill sections.
+The **Granska fraktdokument** action also calls the read-only
+`POST /api/dashboard/freight-packet-check` endpoint. It reads the selected PDFs,
+validates their pages, and displays the actual section order; malformed or
+unrecognized Kyl/Eriksson PDFs fail closed. The fictional local pallet PDFs for
+`900001`–`900005` contain labeled test pages only and do not represent a carrier
+layout. No print job is created.
+
 In another terminal, start the local print agent:
 
 ```sh
@@ -278,6 +377,49 @@ The project is prepared for `visma-274514` in `europe-north1`. The deploy script
 ```sh
 bash scripts/deploy-cloud-run.sh
 ```
+
+For a **separate, IAM-only, read-only** dashboard using production Visma data,
+`scripts/deploy-readonly-live.sh` targets `printward-dashboard-live` with SQL
+database `F0002`, primary GCS prefix `2/`, freight prefix `freight/2/`, and
+the production `printward` Datastore namespace for existing print history. It
+sets `PRINTWARD_READ_ONLY=true` and disables nShift fetching. The service
+account must have Datastore viewer permission only; the script requires an
+explicit `READ_ONLY_SERVICE_ACCOUNT`.
+Inspect the current Cloud Run services, service-account
+permissions, SQL credentials, and access path before running it. This script
+does not replace the existing Printward service, make the dashboard public, or
+enable printing. A code-level read-only flag is not a substitute for
+least-privilege SQL/GCS credentials.
+
+That isolated service was used for verification on 2026-09-25 and was then
+deleted at the owner's request, along with `printward-dashboard-stage`. These
+scripts are historical tools, not the intended deployment target. The SQL
+user's database-level SELECT-only permissions have not yet been independently
+verified.
+
+### Demo continuous deployment
+
+`cloudbuild.demo.yaml` tests, builds, and deploys **only** `printward-demo`.
+The intended Cloud Build trigger watches the dedicated `demo` branch, never
+`main`. The build step changes only the container image so the service's
+authentication, data sources, service identity, and printer-agent URL cannot
+be silently replaced by the pipeline. The build identity must have deployment
+permission on `printward-demo` only and write permission on a separate
+`printward-demo` Artifact Registry repository; it must not have access to
+`printward-prod` or its image repository.
+
+As of 2026-09-25, the trigger is **not active**. Installation `26894157` has
+been granted repository access, but linking `grossmanj/printward` to the
+existing `grossmanj-github` connection fails with `repo grossmanj/printward is
+not accessible to the OAuth token`. The connection's stored authorizer is the
+GitHub user `grossmanj`; that user must renew/fix its Cloud Build GitHub
+authorization before the repository resource and trigger can be created.
+The production branch is `main`, not `master`; no
+Printward production trigger was found in this project's global,
+`europe-north1`, or `europe-west1` Cloud Build trigger lists. Do not rely on a
+merge-to-master production deployment without verifying the owner's actual
+pipeline. The current `printward-demo` service still points at demo Visma
+`F9992` and GCS prefix `9992/`; it has **not yet** been switched to live data.
 
 Demo defaults:
 

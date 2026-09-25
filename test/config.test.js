@@ -45,3 +45,8 @@ test('nShift freight sync defaults to a separate freight prefix', () => {
   assert.deepEqual(config.nshift.palletCopyFields, ['Val2', 'Val3', 'Val5', 'Val6']);
   assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen Mälardalen AB']);
 });
+
+test('read-only mode is opt-in for isolated testing', () => {
+  assert.equal(loadConfig({}).readOnly, false);
+  assert.equal(loadConfig({ PRINTWARD_READ_ONLY: 'true' }).readOnly, true);
+});

@@ -41,6 +41,7 @@ export function loadConfig(env = process.env) {
     mockOrderContextFile: env.MOCK_ORDER_CONTEXT || path.join(projectRoot, 'data', 'mock-order-context.json'),
     ordersCacheMs: Number(env.ORDERS_CACHE_MS || 60_000),
     ordersCacheWarmup: String(env.ORDERS_CACHE_WARMUP || 'true').toLowerCase() !== 'false',
+    readOnly: String(env.PRINTWARD_READ_ONLY || 'false').toLowerCase() === 'true',
     auth: {
       enabled: String(env.PRINTWARD_AUTH_ENABLED || (env.PRINTWARD_LOGIN_PASSWORD ? 'true' : 'false')).toLowerCase() === 'true',
       username: env.PRINTWARD_LOGIN_USER || 'operator',

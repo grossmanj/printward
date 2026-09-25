@@ -179,6 +179,8 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
     source: row.source || 'sqlserver',
     orderNumber,
     customerNo: Number(row.customerNo ?? row.CustNo ?? 0) || null,
+    customerPaymentTerm: Number(row.customerPaymentTerm ?? row.CustomerPaymentTerm ?? row.CPmtTrm ?? 0) || null,
+    customerChainNo: Number(row.customerChainNo ?? row.CustomerChainNo ?? row.R12 ?? 0) || null,
     customerName: String(row.customerName ?? row.CustomerName ?? row.Nm ?? '').trim(),
     deliveryName: String(row.deliveryName ?? row.Nm ?? '').trim(),
     deliveryDate: row.deliveryDate ?? vismaDateToIsoDate(row.DelDt),
@@ -192,6 +194,7 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
     consignmentNo: String(row.consignmentNo ?? row.ConsNo ?? '').trim(),
     distributorNo,
     distributorName,
+    routeGroup: Number(row.routeGroup ?? row.Gr2 ?? 0) || null,
     packerNo,
     packerName,
     freightRequired,
@@ -203,6 +206,7 @@ function normalizeOrderContext(row, lines = [], packingDepartments = [], options
     palletDocumentRequired,
     deliveryMethod: Number(row.deliveryMethod ?? row.DelMt ?? 0) || null,
     deliveryMethodName: String(row.deliveryMethodName ?? row.DeliveryMethodName ?? '').trim(),
+    returnGroup: Number(row.returnGroup ?? row.Gr3 ?? 0) || null,
     dispatchPriority: Number(row.dispatchPriority ?? row.DelPri ?? 0) || null,
     dispatchTime: row.dispatchTime ?? dispatchPriorityToTime(row.dispatchPriority ?? row.DelPri),
     baseOrderNo: Number(row.baseOrderNo ?? row.OrdBasNo ?? 0) || null,
@@ -236,6 +240,14 @@ class DisabledOrderContextClient {
   }
 
   async getByDeliveryDate() {
+    return new Map();
+  }
+
+  async getReturnsByDeliveryDate() {
+    return new Map();
+  }
+
+  async getPickupsByDeliveryDate() {
     return new Map();
   }
 
@@ -274,7 +286,30 @@ export class MockOrderContextClient {
   async getByDeliveryDate(deliveryDate) {
     const cache = await this.load();
     return new Map(
-      Array.from(cache.entries()).filter(([, context]) => context.deliveryDate === deliveryDate)
+      Array.from(cache.entries()).filter(([, context]) => (
+        context.deliveryDate === deliveryDate && context.returnGroup !== 30
+      ))
+    );
+  }
+
+  async getReturnsByDeliveryDate(deliveryDate) {
+    const cache = await this.load();
+    return new Map(
+      Array.from(cache.entries()).filter(([, context]) => (
+        context.deliveryDate === deliveryDate
+        && context.returnGroup === 30
+      ))
+    );
+  }
+
+  async getPickupsByDeliveryDate(deliveryDate) {
+    const cache = await this.load();
+    return new Map(
+      Array.from(cache.entries()).filter(([, context]) => (
+        context.deliveryDate === deliveryDate
+        && context.returnGroup !== 30
+        && [6, 16, 42, 43, 44, 45, 46].includes(context.deliveryMethod)
+      ))
     );
   }
 
@@ -360,33 +395,87 @@ export class SqlServerOrderContextClient {
     return result;
   }
 
+  async getOrderNumbersByDeliveryDate(delDt, whereSql, orderBySql) {
+    const sql = await this.getSql();
+    const pool = await this.getPool();
+    const batchSize = Math.max(1, Math.min(Number(this.config.maxOrdersPerQuery || 500), 500));
+    const orderNumbers = [];
+
+    for (let offset = 0; ; offset += batchSize) {
+      const request = pool.request();
+      request.input('delDt', sql.Int, delDt);
+      request.input('limit', sql.Int, batchSize);
+      request.input('offset', sql.Int, offset);
+      const response = await request.query(`
+        SELECT o.OrdNo
+        FROM Ord o
+        WHERE o.DelDt = @delDt
+          ${whereSql}
+        ORDER BY ${orderBySql}
+        OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
+      `);
+      const batch = (response.recordset || []).map((row) => row.OrdNo).filter(Boolean);
+      orderNumbers.push(...batch);
+      if (batch.length < batchSize) break;
+    }
+
+    return orderNumbers;
+  }
+
+  async getDateContextsInBatches(orderNumbers, options = {}) {
+    const batchSize = Math.max(1, Math.min(Number(this.config.maxOrdersPerQuery || 500), 500));
+    const contexts = new Map();
+    for (const batch of chunk(orderNumbers, batchSize)) {
+      const fetched = options.includeReturns || options.includePickups
+        ? await this.fetchBatch(batch, options)
+        : await this.getByOrderNumbers(batch);
+      for (const [orderNumber, context] of fetched) contexts.set(orderNumber, context);
+    }
+    return contexts;
+  }
+
   async getByDeliveryDate(deliveryDate) {
     const delDt = isoDateToVismaDate(deliveryDate);
     if (!delDt) return new Map();
-
-    const sql = await this.getSql();
-    const pool = await this.getPool();
-    const request = pool.request();
-    request.input('delDt', sql.Int, delDt);
-    request.input('limit', sql.Int, this.config.maxOrdersPerQuery || 500);
-
-    const query = `
-      SELECT TOP (@limit) o.OrdNo
-      FROM Ord o
-      WHERE o.DelDt = @delDt
-        AND o.TrTp = 1
-        AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
-        AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
-        AND ISNULL(o.DelMt, 0) NOT IN (6, 40, 150, 151, 152)
-      ORDER BY ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo;
-    `;
-
-    const response = await request.query(query);
-    const orderNumbers = (response.recordset || []).map((row) => row.OrdNo).filter(Boolean);
-    return this.getByOrderNumbers(orderNumbers);
+    const orderNumbers = await this.getOrderNumbersByDeliveryDate(delDt, `
+      AND o.TrTp = 1
+      AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
+      AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
+      AND ISNULL(o.Gr3, 0) <> 30
+      AND ISNULL(o.DelMt, 0) NOT IN (6, 40, 150, 151, 152)
+    `, 'ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo');
+    return this.getDateContextsInBatches(orderNumbers);
   }
 
-  async fetchBatch(orderNumbers) {
+  async getReturnsByDeliveryDate(deliveryDate) {
+    const delDt = isoDateToVismaDate(deliveryDate);
+    if (!delDt) return new Map();
+
+    const orderNumbers = await this.getOrderNumbersByDeliveryDate(delDt, `
+      AND o.TrTp = 1
+      AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
+      AND ISNULL(o.Gr3, 0) = 30
+    `, 'ISNULL(o.DelPri, 99), o.OrdNo');
+    return this.getDateContextsInBatches(orderNumbers, { includeReturns: true });
+  }
+
+  async getPickupsByDeliveryDate(deliveryDate) {
+    const delDt = isoDateToVismaDate(deliveryDate);
+    if (!delDt) return new Map();
+
+    const orderNumbers = await this.getOrderNumbersByDeliveryDate(delDt, `
+      AND o.TrTp = 1
+      AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
+      AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
+      AND ISNULL(o.Gr3, 0) <> 30
+      AND ISNULL(o.DelMt, 0) IN (6, 16, 42, 43, 44, 45, 46)
+    `, 'ISNULL(o.DelPri, 99), ISNULL(o.DelMt, 0), o.OrdNo');
+    return this.getDateContextsInBatches(orderNumbers, { includePickups: true });
+  }
+
+  async fetchBatch(orderNumbers, { includeReturns = false, includePickups = false } = {}) {
+    if (orderNumbers.length === 0) return new Map();
+    if (includeReturns && includePickups) throw new Error('Return and pickup SQL scopes cannot be combined.');
     const sql = await this.getSql();
     const pool = await this.getPool();
     const request = pool.request();
@@ -424,6 +513,8 @@ export class SqlServerOrderContextClient {
         o.OrdPrSt,
         o.TrTp,
         o.OrdTp,
+        o.Gr2,
+        o.Gr3,
         ISNULL(o.Nm, '') AS Nm,
         o.OrdBasNo,
         ISNULL(o.SupNo, 0) AS SupNo,
@@ -437,6 +528,8 @@ export class SqlServerOrderContextClient {
         ISNULL(o.ReqNo, '') AS ReqNo,
         ISNULL(o.Inf2, '') AS Inf2,
         ISNULL(NULLIF(o.Nm, ''), ISNULL(customer.Nm, '')) AS CustomerName,
+        ISNULL(customer.CPmtTrm, 0) AS CustomerPaymentTerm,
+        ISNULL(customer.R12, 0) AS CustomerChainNo,
         ISNULL(distributor.Nm, '') AS DistributorName,
         ISNULL(packer.Nm, '') AS PackerName,
         CASE
@@ -462,7 +555,7 @@ export class SqlServerOrderContextClient {
        AND deliveryMethod.TxtTp = 5
        AND deliveryMethod.TxtNo = o.DelMt
       OUTER APPLY (
-        SELECT TOP 1 a.Nm
+        SELECT TOP 1 a.Nm, a.CPmtTrm, a.R12
         FROM Actor a
         WHERE a.CustNo = o.CustNo
         ORDER BY a.ActNo
@@ -504,8 +597,8 @@ export class SqlServerOrderContextClient {
       ) freight
       WHERE o.TrTp = 1
         AND (ISNULL(o.OrdPrSt, 0) & 536870912) = 0
-        AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)
-        AND ISNULL(o.DelMt, 0) NOT IN (6, 40, 150, 151, 152);
+        ${includeReturns ? '' : 'AND ((ISNULL(o.OrdPrSt, 0) & 8) = 8 OR (ISNULL(o.OrdPrSt, 0) & 8192) = 8192)'}
+        AND ${includeReturns ? 'ISNULL(o.Gr3, 0) = 30' : includePickups ? 'ISNULL(o.Gr3, 0) <> 30 AND ISNULL(o.DelMt, 0) IN (6, 16, 42, 43, 44, 45, 46)' : 'ISNULL(o.Gr3, 0) <> 30 AND ISNULL(o.DelMt, 0) NOT IN (6, 40, 150, 151, 152)'};
 
       SELECT
         l.OrdNo,
@@ -664,6 +757,8 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       source: 'none',
       orderNumber: order.orderNumber,
       customerNo: null,
+      customerPaymentTerm: null,
+      customerChainNo: null,
       customerName: '',
       deliveryName: '',
       deliveryDate: null,
@@ -677,6 +772,7 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       consignmentNo: '',
       distributorNo: 0,
       distributorName: '',
+      routeGroup: null,
       packerNo: 0,
       packerName: '',
       freightRequired: false,
@@ -688,6 +784,7 @@ export function attachOrderContexts(orders, contextByOrderNumber) {
       palletDocumentRequired: false,
       deliveryMethod: null,
       deliveryMethodName: '',
+      returnGroup: null,
       dispatchPriority: null,
       dispatchTime: null,
       baseOrderNo: null,

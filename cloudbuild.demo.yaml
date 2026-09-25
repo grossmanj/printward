@@ -1,0 +1,51 @@
+# This configuration is used only by the ^demo$ branch trigger.
+# The build identity must be scoped to this image repository and the
+# printward-demo Cloud Run service. Do not grant it access to printward-prod.
+steps:
+  - id: install
+    name: node:22-slim
+    entrypoint: npm
+    args: [ci]
+
+  - id: test
+    name: node:22-slim
+    entrypoint: npm
+    args: [test]
+    waitFor: [install]
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - europe-north1-docker.pkg.dev/$PROJECT_ID/printward-demo/app:$COMMIT_SHA
+      - .
+    waitFor: [test]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - europe-north1-docker.pkg.dev/$PROJECT_ID/printward-demo/app:$COMMIT_SHA
+    waitFor: [build]
+
+  - id: deploy-demo
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - printward-demo
+      - --project=$PROJECT_ID
+      - --region=europe-north1
+      - --image=europe-north1-docker.pkg.dev/$PROJECT_ID/printward-demo/app:$COMMIT_SHA
+      - --quiet
+    waitFor: [push]
+
+images:
+  - europe-north1-docker.pkg.dev/$PROJECT_ID/printward-demo/app:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

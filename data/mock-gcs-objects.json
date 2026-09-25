@@ -68,5 +68,60 @@
     "updated": "2026-06-24T10:41:00.000Z",
     "generation": "1004003",
     "contentType": "application/pdf"
+  },
+  {
+    "name": "pallet900001.pdf",
+    "size": 24000,
+    "updated": "2026-06-23T15:00:00.000Z",
+    "generation": "9000011",
+    "contentType": "application/pdf",
+    "mockPages": [
+      "TESTETIKETT Kylt TEST-KYLT-01",
+      "TESTETIKETT Fryst TEST-FRYST-02",
+      "FRAKTSEDEL Fryst TEST-FRYST-02",
+      "FRAKTSEDEL Kyla TEST-KYLT-01"
+    ]
+  },
+  {
+    "name": "pallet900002.pdf",
+    "size": 24000,
+    "updated": "2026-06-23T15:00:00.000Z",
+    "generation": "9000021",
+    "contentType": "application/pdf",
+    "mockPages": [
+      "TESTETIKETT Eriksson Kylt TEST-ERIKSSON-16",
+      "FRAKTSEDEL Kyla TEST-ERIKSSON-16"
+    ]
+  },
+  {
+    "name": "pallet900003.pdf",
+    "size": 24000,
+    "updated": "2026-06-23T15:00:00.000Z",
+    "generation": "9000031",
+    "contentType": "application/pdf",
+    "mockPages": [
+      "TESTETIKETT Eriksson Fryst TEST-ERIKSSON-07",
+      "FRAKTSEDEL Fryst TEST-ERIKSSON-07"
+    ]
+  },
+  {
+    "name": "freight900004.pdf",
+    "size": 24000,
+    "updated": "2026-06-23T15:00:00.000Z",
+    "generation": "9000041",
+    "contentType": "application/pdf",
+    "mockPages": [
+      "TEST FRAKTSEDEL DSV Finland rutt 47 TEST-DSV-KYLT-07"
+    ]
+  },
+  {
+    "name": "freight900005.pdf",
+    "size": 24000,
+    "updated": "2026-06-23T15:00:00.000Z",
+    "generation": "9000051",
+    "contentType": "application/pdf",
+    "mockPages": [
+      "TEST FRAKTSEDEL DSV Finland rutt 48 TEST-DSV-FRYST-13"
+    ]
   }
 ]

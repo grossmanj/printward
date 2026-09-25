@@ -3,6 +3,17 @@ import { createHash } from 'node:crypto';
 
 import { createPlaceholderPdf } from './pdf.js';
 
+async function createMockMultiPagePdf(pageTexts) {
+  const { PDFDocument } = await import('pdf-lib');
+  const merged = await PDFDocument.create();
+  for (const text of pageTexts) {
+    const pagePdf = await PDFDocument.load(createPlaceholderPdf(String(text)));
+    const [page] = await merged.copyPages(pagePdf, [0]);
+    merged.addPage(page);
+  }
+  return Buffer.from(await merged.save());
+}
+
 function normalizeListedObject(object, source = 'primary') {
   return {
     name: object.name,
@@ -41,10 +52,10 @@ export class MockGcsClient {
   }
 
   async getObject(name, source = 'primary', generation = '') {
-    const objects = await this.listObjects();
+    const objects = JSON.parse(await fs.readFile(this.objectsFile, 'utf8'));
     const object = objects.find((item) => {
       return item.name === name
-        && item.source === source
+        && (item.source || 'primary') === source
         && (!generation || String(item.generation || '') === String(generation));
     });
     if (!object) {
@@ -54,12 +65,14 @@ export class MockGcsClient {
       throw error;
     }
 
-    const body = createPlaceholderPdf(object.name, [
-      `Object: ${object.name}`,
-      `Updated: ${object.updated || 'unknown'}`,
-      `Generation: ${object.generation || 'unknown'}`,
-      'This placeholder PDF is generated in mock mode.'
-    ]);
+    const body = Array.isArray(object.mockPages) && object.mockPages.length > 0
+      ? await createMockMultiPagePdf(object.mockPages)
+      : createPlaceholderPdf(object.name, [
+          `Object: ${object.name}`,
+          `Updated: ${object.updated || 'unknown'}`,
+          `Generation: ${object.generation || 'unknown'}`,
+          'This placeholder PDF is generated in mock mode.'
+        ]);
 
     return {
       body,

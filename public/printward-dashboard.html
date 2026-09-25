@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Printward – läsvy</title>
+    <link rel="stylesheet" href="/printward-dashboard.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <strong>Printward</strong>
+      <span class="read-only-banner">Endast läsning · inga utskrifter</span>
+    </header>
+
+    <main class="dashboard">
+      <section class="toolbar" aria-label="Översikt och filter">
+        <div class="metric"><span>Totalt</span><b id="dashboardTotal">–</b></div>
+        <div class="metric"><span>Pågående plock</span><b id="dashboardPacking">–</b></div>
+        <label class="search"><span>⌕</span><input id="dashboardSearch" type="search" placeholder="Sök order eller bokningsnummer" aria-label="Sök order eller bokningsnummer"></label>
+        <label class="date"><span>Leveransdatum</span><input id="dashboardDate" type="date"></label>
+        <button class="control-button active-date">Idag</button>
+        <button class="control-button">Nästa dag</button>
+        <select id="dashboardSort" aria-label="Sortering" title="Sorterar uppslag för Tidig/FM/EM, fraktsedlar och kedjornas följesedlar"><option value="priority">Sortera: Leveransprioritet</option><option value="method">Sortera: Körsätt</option></select>
+        <select aria-label="Distributör"><option>Distributör: Alla</option></select>
+      </section>
+
+      <nav class="nav-tabs" aria-label="Sidor">
+        <button class="nav-tab active" data-view="printward">Printward</button>
+        <button class="nav-tab" data-view="alla">Alla order</button>
+        <button class="nav-tab" data-view="plock">Pågående plock</button>
+        <button class="nav-tab" data-view="uppdaterade">Uppdaterade <i hidden>0</i></button>
+        <button class="nav-tab" data-view="saknade">Saknade</button>
+        <button id="refresh" class="refresh nav-refresh">↻&nbsp; Uppdatera</button>
+      </nav>
+
+      <section class="simulation-toolbar" aria-label="Virtuell skrivare">
+        <button id="simulationToggle" type="button" aria-pressed="false">Starta virtuell skrivare</button>
+        <span id="simulationStatus">Testläget är avstängt. Riktiga utskrifter är alltid spärrade i den här vyn.</span>
+        <button id="simulationHistory" type="button" hidden>Visa testkö</button>
+        <button id="simulationReset" type="button" hidden>Rensa simulering</button>
+      </section>
+
+      <p id="dashboardSource" class="dashboard-source" role="status">Hämtar följesedlar, fraktsedlar, returer, hämtningar och kedjor. Övriga kunder väntar på DocSmt-regeln.</p>
+      <div class="lookup-actions" id="lookupActions" hidden>
+        <button class="back-to-dashboard" id="backToDashboard" type="button" aria-label="Stäng uppslag och gå tillbaka till Printward">×&nbsp; Stäng uppslag · tillbaka till Printward</button>
+      </div>
+      <section class="grid">
+        <div class="top-row">
+        <article class="panel slips">
+          <header><h1>Följesedlar</h1><p>Följesedel + partibilaga häftas ihop per order</p><p id="dispatchCaution" hidden></p></header>
+          <div class="dispatch-cards">
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="early"><strong>Tidig</strong><time>Före 07:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="morning"><strong>Förmiddag</strong><time>07:00–11:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="afternoon"><strong>Eftermiddag</strong><time>12:00–16:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+          </div>
+        </article>
+
+        <article class="panel freight">
+          <header><h1>Fraktsedlar</h1><p>Endast fraktdokument — inga följesedlar</p></header>
+          <div class="freight-cards">
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="kyl-and-frys"><strong>Kyl & Frys <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>klara</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut alla klara avgångar</button></div>
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="dsv-finland"><strong>DSV Finland <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>klara</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut alla klara avgångar</button></div>
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="best-transport"><strong>Best Transport</strong><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Best Transport saknar utskriftsflöde">Skriv ut alla klara avgångar</button></div>
+            <div class="card-with-print"><button class="freight-card eriksson" data-freight-panel="eriksson"><strong>Eriksson <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>klara</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut alla klara avgångar</button></div>
+            <div class="card-with-print"><button class="freight-card other-carrier" data-freight-panel="other-carriers"><strong>Övriga Åkerier</strong><p>Jansen Logistic<br>Tyskland · rutt 52</p><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Övriga åkerier saknar utskriftsflöde">Skriv ut alla klara avgångar</button></div>
+          </div>
+        </article>
+        </div>
+
+        <div class="bottom-row">
+        <article class="panel chains">
+          <header><h1>Följesedlar med krav på utskrift</h1></header>
+          <div class="chain-cards">
+            <div class="card-with-print"><button class="chain-card" data-chain-panel="sushi-yama"><strong>Sushi Yama <i hidden>0</i></strong><b class="chain-count"><em>–</em> / <span>–</span> utskrivna</b><p class="done"><b class="status-icon">✓</b><span class="chain-own">Egna bilar — hämtar status…</span></p><p class="alert"><b class="status-icon">!</b><span class="chain-remote">Fjärrgods — hämtar status…</span></p><p class="chain-unknown" hidden></p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="chain-card" data-chain-panel="chopchop"><strong>ChopChop <i hidden>0</i></strong><b class="chain-count"><em>–</em> / <span>–</span> utskrivna</b><p class="done"><b class="status-icon">✓</b><span class="chain-own">Egna bilar — hämtar status…</span></p><p class="alert"><b class="status-icon">!</b><span class="chain-remote">Fjärrgods — hämtar status…</span></p><p class="chain-unknown" hidden></p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="chain-card" data-title="Övriga kunder" data-detail="Urvalet för andra kunder med fysisk följesedel är ännu inte kopplat till Visma. Actor.DocSmt måste verifieras innan vi kan visa order eller status här."><strong>Övriga kunder</strong><b class="chain-count">Regel ej klar</b><p>DocSmt behöver verifieras</p><p>Ingen säker utskriftssiffra ännu</p><span>Visa information</span></button><button class="quick-print" type="button" disabled title="DocSmt-regeln är inte verifierad">Skriv ut klara</button></div>
+          </div>
+        </article>
+
+        <article class="panel returns">
+          <header><h1>Returer</h1><p>Bokade returer att hämta</p></header>
+          <div class="card-with-print"><button class="return-card" data-returns="true">
+            <strong><b data-return-total>–</b> <small>returer att hantera</small><i hidden>0</i></strong>
+            <div class="return-breakdown"><p>Hämtar returer…</p></div>
+            <span>Visa returer</span>
+          </button><button class="quick-print" type="button" disabled title="Returdokument och utskriftsregel är inte verifierade">Skriv ut klara</button></div>
+        </article>
+
+        <article class="panel pickups">
+          <header><h1>Hämtningar, bud &amp; taxi</h1><p>Order som hämtas eller körs med extern bil · <b id="pickupCount">–</b> order</p></header>
+          <div class="pickup-list"><p class="pickup-empty">Hämtar order…</p></div>
+          <button class="pickup-more" hidden>Visa alla order</button>
+        </article>
+        </div>
+      </section>
+
+      <section id="ordersView" class="orders-view" hidden aria-live="polite"></section>
+    </main>
+
+    <dialog id="detailsDialog"><form method="dialog"><button class="dialog-close" aria-label="Stäng">×</button><h2 id="dialogTitle"></h2><div id="dialogDetail"></div><p class="dialog-note">Läsvy: utskrift aktiveras först efter att regler och testorder är godkända.</p><button class="dialog-button">Stäng</button></form></dialog>
+    <dialog id="simulationDialog" aria-labelledby="simulationTitle">
+      <button class="dialog-close" id="simulationClose" type="button" aria-label="Stäng simulering">×</button>
+      <h2 id="simulationTitle">Virtuell utskrift</h2>
+      <p id="simulationDescription"></p>
+      <ol id="simulationItems"></ol>
+      <p class="dialog-note">Endast ett test i denna webbläsare. Ingen PDF skickas till skrivare eller nShift och riktig utskriftsstatus ändras inte.</p>
+      <div class="simulation-dialog-actions"><button id="simulationCancel" type="button">Avbryt</button><button id="simulationConfirm" class="dialog-button" type="button">Simulera utskrift</button></div>
+    </dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/printward-dashboard.js"></script>
+  </body>
+</html>

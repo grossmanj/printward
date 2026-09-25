@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { loadConfig, projectRoot } from '../src/config.js';
 import { createRequestHandler } from '../src/server.js';
 
-async function createAuthHandler(t) {
+async function createAuthHandler(t, envOverrides = {}) {
   const dir = await fs.mkdtemp(path.join(tmpdir(), 'printward-auth-test-'));
   const config = loadConfig({
     PRINTWARD_AUTH_ENABLED: 'true',
@@ -22,7 +22,8 @@ async function createAuthHandler(t) {
     DATA_FILE: path.join(dir, 'state.json'),
     ORDERS_CACHE_WARMUP: 'false',
     REQUIRED_DOCUMENT_TYPES: 'packingSlip,attachment',
-    VISIBLE_DOCUMENT_TYPES: 'packingSlip,attachment'
+    VISIBLE_DOCUMENT_TYPES: 'packingSlip,attachment',
+    ...envOverrides
   });
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true });
@@ -175,6 +176,36 @@ test('auth blocks app/API until login succeeds', async (t) => {
     headers: { cookie }
   });
   assert.equal(authedHealth.status, 200);
+});
+
+test('read-only service blocks print jobs but permits freight preflight', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_READ_ONLY: 'true' });
+  const login = await request(handler, '/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  const cookie = login.headers.get('set-cookie');
+  assert.equal(login.status, 303);
+
+  const health = await request(handler, '/api/health', { headers: { cookie } });
+  assert.equal((await health.json()).readOnly, true);
+
+  for (const endpoint of ['/api/defaults', '/api/print-jobs', '/api/print-jobs/anything/retry', '/api/print-jobs/anything/complete']) {
+    const response = await request(handler, endpoint, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}'
+    });
+    assert.equal(response.status, 403, endpoint);
+  }
+
+  const freightPlan = await request(handler, '/api/dashboard/freight-plan', {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(freightPlan.status, 400);
 });
 
 test('job token allows local agent to fetch only documents in that print job', async (t) => {

@@ -8,6 +8,7 @@ import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
 import {
   analyzeKylPalletPdf,
+  countPdfPages,
   createCenteredTextPdf,
   extractKylFreightSection,
   extractPdfPages,
@@ -20,12 +21,14 @@ import {
   buildOrders,
   documentTypesForPrintOrder,
   filterOrders,
+  freightOnlyPrintSnapshots,
   isPrintBlockedByPacking,
   orderToPrintSnapshots,
   summarizeDispatchCombos,
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore } from './stateStore.js';
+import { planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -553,6 +556,35 @@ async function annotateKylPalletLabelPages(storage, orders) {
   });
 }
 
+export async function verifyFreightPacket(storage, selectedOrders, plan) {
+  if (!plan?.valid || !Array.isArray(plan.orders) || plan.orders.length === 0) {
+    throw new Error('A valid freight plan is required before PDF verification.');
+  }
+  await annotateKylPalletLabelPages(storage, selectedOrders);
+  const snapshots = freightOnlyPrintSnapshots(selectedOrders, plan);
+  const verifiedFiles = await mapWithConcurrency(plan.orders, 6, async (item) => {
+    const document = item.document;
+    const object = await storage.getObject(document.name, document.source, document.generation || '');
+    const pageCount = await countPdfPages(object.body);
+    if (pageCount < 1) throw new Error(`Freight PDF for order ${item.orderNumber} has no pages.`);
+    return { orderNumber: item.orderNumber, fileName: document.fileName, pageCount };
+  });
+  return {
+    verifiedFiles,
+    sections: snapshots.map((snapshot) => ({
+      orderNumber: String(snapshot.orderNumber),
+      sectionType: snapshot.sectionType || snapshot.documents[0]?.type || 'freight',
+      sectionLabel: snapshot.sectionLabel || 'Freight document',
+      documents: snapshot.documents.map((document) => ({
+        type: document.type,
+        fileName: document.fileName,
+        pages: document.pages || null,
+        pageCopies: document.pageCopies || 1
+      }))
+    }))
+  };
+}
+
 function comboSeparatorText(order = {}) {
   const context = order.context || {};
   return context.deliveryMethodName || (context.deliveryMethod ? `Method ${context.deliveryMethod}` : 'No delivery method');
@@ -744,17 +776,17 @@ function expectedDocumentLookups(config, orderNumbers) {
       });
     }
 
-    if (visible.has('pallet') && config.freightGcs?.bucket) {
+    if (visible.has('pallet') && (config.freightGcs?.bucket || config.gcs.mode === 'mock')) {
       lookups.push({
-        source: 'freight',
-        name: prefixedObjectName(config.freightGcs.prefix, `pallet${orderNumber}.pdf`)
+        source: config.freightGcs?.bucket ? 'freight' : 'primary',
+        name: prefixedObjectName(config.freightGcs?.bucket ? config.freightGcs.prefix : config.gcs.prefix, `pallet${orderNumber}.pdf`)
       });
     }
 
-    if (visible.has('freight') && config.freightGcs?.bucket) {
+    if (visible.has('freight') && (config.freightGcs?.bucket || config.gcs.mode === 'mock')) {
       lookups.push({
-        source: 'freight',
-        name: prefixedObjectName(config.freightGcs.prefix, `freight${orderNumber}.pdf`)
+        source: config.freightGcs?.bucket ? 'freight' : 'primary',
+        name: prefixedObjectName(config.freightGcs?.bucket ? config.freightGcs.prefix : config.gcs.prefix, `freight${orderNumber}.pdf`)
       });
     }
   }
@@ -1009,9 +1041,17 @@ async function handleApi(req, res, requestUrl, context) {
   const { config, storage, store, orderContext, ordersCache, eventHub } = context;
   const pathname = requestUrl.pathname;
 
+  const readOnlyPost = req.method === 'POST'
+    && ['/api/dashboard/freight-plan', '/api/dashboard/freight-packet-check'].includes(pathname);
+  if (config.readOnly && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !readOnlyPost) {
+    sendJson(res, 403, { error: 'This Printward service is read-only.' });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/health') {
     sendJson(res, 200, {
       ok: true,
+      readOnly: config.readOnly,
       mode: config.gcs.mode,
       bucket: config.gcs.bucket || null,
       prefix: config.gcs.prefix || '',
@@ -1061,6 +1101,134 @@ async function handleApi(req, res, requestUrl, context) {
       },
       contextStatus,
       documentTypes: visibleDocumentTypes(config)
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/dashboard/freight') {
+    const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+      sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
+      return;
+    }
+    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    const dateFiltered = filterOrders(orders, { deliveryDate });
+    sendJson(res, 200, {
+      deliveryDate,
+      panels: summarizeFreightPanels(dateFiltered),
+      summary: summarizeOrders(dateFiltered, { documentTypes: config.documentTypes.visible }),
+      contextStatus
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && ['/api/dashboard/freight-plan', '/api/dashboard/freight-packet-check'].includes(pathname)) {
+    const body = await readJsonBody(req);
+    const deliveryDate = String(body.deliveryDate || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+      sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
+      return;
+    }
+
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, {
+      deliveryDate,
+      refresh: true
+    });
+    if (contextStatus?.available === false) {
+      sendJson(res, 503, { error: 'The order source is unavailable; no freight plan can be verified.', contextStatus });
+      return;
+    }
+
+    const plan = planFreightDocumentSelection(
+      filterOrders(orders, { deliveryDate }),
+      body.panelId,
+      body.orderNumbers
+    );
+    if (!plan.valid || pathname === '/api/dashboard/freight-plan') {
+      sendJson(res, plan.valid ? 200 : 409, {
+        deliveryDate,
+        ...plan,
+        readOnly: true,
+        contextStatus
+      });
+      return;
+    }
+
+    const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+    const selectedOrders = plan.orders.map(({ orderNumber }) => byNumber.get(orderNumber));
+    try {
+      const verified = await verifyFreightPacket(storage, selectedOrders, plan);
+      sendJson(res, 200, {
+        deliveryDate,
+        ...plan,
+        readOnly: true,
+        pdfVerified: true,
+        ...verified,
+        contextStatus
+      });
+    } catch (error) {
+      sendJson(res, 409, {
+        deliveryDate,
+        valid: false,
+        readOnly: true,
+        errors: [`PDF-kontroll misslyckades: ${error.message}`],
+        contextStatus
+      });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/dashboard/dispatch') {
+    const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+      sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
+      return;
+    }
+    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    sendJson(res, 200, {
+      deliveryDate,
+      ...summarizeOwnDispatch(filterOrders(orders, { deliveryDate })),
+      contextStatus
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/dashboard/chains') {
+    const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+      sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
+      return;
+    }
+    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    sendJson(res, 200, {
+      deliveryDate,
+      panels: summarizeChainPanels(filterOrders(orders, { deliveryDate })),
+      contextStatus
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/returns') {
+    const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
+    const returnContexts = await orderContext.getReturnsByDeliveryDate(deliveryDate);
+    const { returns, summary } = summarizeReturnDepartures(Array.from(returnContexts.values()));
+    sendJson(res, 200, {
+      returns,
+      summary,
+      contextStatus: await orderContext.health()
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/pickups') {
+    const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
+    const pickupContexts = await orderContext.getPickupsByDeliveryDate(deliveryDate);
+    sendJson(res, 200, {
+      ...summarizePickups(Array.from(pickupContexts.values())),
+      contextStatus: await orderContext.health()
     });
     return;
   }

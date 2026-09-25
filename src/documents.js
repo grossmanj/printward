@@ -179,6 +179,7 @@ function normalizedDistributorName(value) {
 }
 
 function freightPageCopiesForOrder(order) {
+  if (Number(order.context?.distributorNo) === 50063993) return 4;
   return FREIGHT_PRINT_COPY_RULES.get(normalizedDistributorName(order.context?.distributorName)) || 1;
 }
 
@@ -386,6 +387,9 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
         context.yourReference,
         context.requisitionNo,
         context.consignmentNo,
+        context.freightConsignmentFresh,
+        context.freightConsignmentFrozen,
+        ...(context.freightConsignmentNumbers || []),
         context.distributorNo,
         context.distributorName,
         context.packerNo,
@@ -596,4 +600,47 @@ export function orderToPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   if (usesKylPalletSplit(order)) return kylPalletPrintSnapshots(order, selectedTypes);
   const snapshot = orderToPrintSnapshot(order, selectedTypes);
   return snapshot.documents.length > 0 ? [snapshot] : [];
+}
+
+// Build only the documents approved by a fresh freight plan. This is not
+// connected to job creation until real carrier PDFs and page order are checked.
+export function freightOnlyPrintSnapshots(orders = [], plan = {}) {
+  if (!plan.valid || !Array.isArray(plan.orders) || plan.orders.length === 0) {
+    throw new Error('A valid non-empty freight plan is required.');
+  }
+
+  const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+  const seen = new Set();
+  const snapshots = [];
+
+  for (const item of plan.orders) {
+    const number = String(item.orderNumber);
+    if (seen.has(number)) throw new Error(`Duplicate order ${number} in freight plan.`);
+    seen.add(number);
+
+    const order = byNumber.get(number);
+    const type = item.document?.type;
+    const document = order?.documents?.[type];
+    if (!order || !['pallet', 'freight'].includes(type) || !document?.name || document.type !== type) {
+      throw new Error(`Freight document for order ${number} is unavailable.`);
+    }
+    if (document.name !== item.document.name
+      || (document.source || 'primary') !== item.document.source
+      || String(document.generation || '') !== String(item.document.generation || '')) {
+      throw new Error(`Freight document for order ${number} has changed; review the selection again.`);
+    }
+    if (type === 'pallet' && Number(order.context?.distributorNo) === 7331697) {
+      if (!usesKylPalletSplit(order) || !order.context?.kylPalletPageGroups?.labelPages?.length) {
+        throw new Error(`Kyl & Frys PDF pages for order ${number} have not been verified.`);
+      }
+    }
+
+    const sections = orderToPrintSnapshots(order, [type]);
+    if (!sections.length || sections.some((section) => section.documents.some((part) => part.type !== type))) {
+      throw new Error(`Freight-only packet for order ${number} could not be verified.`);
+    }
+    snapshots.push(...sections);
+  }
+
+  return snapshots;
 }

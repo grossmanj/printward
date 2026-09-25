@@ -8,12 +8,14 @@ import {
   classifyObject,
   documentTypesForPrintOrder,
   filterOrders,
+  freightOnlyPrintSnapshots,
   isPrintBlockedByPacking,
   orderToPrintSnapshot,
   orderToPrintSnapshots,
   summarizeDispatchCombos,
   summarizeOrders
 } from '../src/documents.js';
+import { planFreightDocumentSelection } from '../src/dashboardRules.js';
 import { attachOrderContexts } from '../src/orderContext.js';
 import { buildPrintIndex } from '../src/stateStore.js';
 
@@ -248,6 +250,64 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
   assert.equal(snapshots[4].documents[0].pages, '4-5');
 });
 
+test('freight-only packet uses verified Eriksson pages without packing documents', () => {
+  const order = {
+    orderNumber: '100',
+    context: {
+      distributorNo: 7331697,
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      deliveryMethod: 25,
+      palletDocumentRequired: true,
+      freightConsignmentFresh: 'FRESH-100',
+      freightConsignmentFrozen: 'FROZEN-100',
+      kylPalletPageGroups: {
+        labelPages: [1, 2],
+        frozenFreightPages: [3],
+        coolingFreightPages: [4]
+      }
+    },
+    missingTypes: [],
+    documents: {
+      pallet: { name: 'pallet100.pdf', source: 'freight', generation: '1', type: 'pallet', fileName: 'pallet100.pdf' },
+      packingSlip: { name: 'order100.pdf', type: 'packingSlip' },
+      attachment: { name: 'parti100.pdf', type: 'attachment' }
+    }
+  };
+  const plan = planFreightDocumentSelection([order], 'eriksson', ['100']);
+  const snapshots = freightOnlyPrintSnapshots([order], plan);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
+    'pallet-label-1', 'pallet-label-2', 'frozen-freight', 'cooling-freight'
+  ]);
+  assert.ok(snapshots.every((snapshot) => snapshot.documents.every((document) => document.type === 'pallet')));
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents[0].pages), ['1', '2', '3', '4']);
+});
+
+test('freight-only packet uses the DSV freight PDF and refuses changed or unverified documents', () => {
+  const order = {
+    orderNumber: '200',
+    context: { distributorNo: 50063993, deliveryMethod: 47 },
+    missingTypes: [],
+    documents: {
+      freight: { name: 'freight200.pdf', source: 'freight', generation: '2', type: 'freight', fileName: 'freight200.pdf' },
+      packingSlip: { name: 'order200.pdf', type: 'packingSlip' }
+    }
+  };
+  const plan = planFreightDocumentSelection([order], 'dsv-finland', ['200']);
+  const snapshots = freightOnlyPrintSnapshots([order], plan);
+  assert.deepEqual(snapshots.flatMap((snapshot) => snapshot.documents.map((document) => document.type)), ['freight']);
+  order.documents.freight.generation = '3';
+  assert.throws(() => freightOnlyPrintSnapshots([order], plan), /has changed/);
+
+  const kyl = {
+    orderNumber: '300',
+    context: { distributorNo: 7331697, distributorName: 'Kyl- och Frysexpressen Mälardalen AB', deliveryMethod: 25 },
+    missingTypes: [],
+    documents: { pallet: { name: 'pallet300.pdf', type: 'pallet' } }
+  };
+  const kylPlan = planFreightDocumentSelection([kyl], 'eriksson', ['300']);
+  assert.throws(() => freightOnlyPrintSnapshots([kyl], kylPlan), /have not been verified/);
+});
+
 test('requires visible freight documents even without freight context', () => {
   const orders = attachOrderContexts(buildOrders([
     { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
@@ -400,7 +460,9 @@ test('filters orders by SQL context fields', () => {
       distributorName: 'External Freight AB',
       deliveryMethodName: 'Uppsala linehaul',
       deliveryDate: '2026-06-26',
-      dispatchTime: '12:00'
+      dispatchTime: '12:00',
+      freightConsignmentFresh: '0068573012',
+      freightConsignmentFrozen: '0068573900'
     }]
   ]));
 
@@ -412,6 +474,8 @@ test('filters orders by SQL context fields', () => {
   assert.equal(filterOrders(orders, { q: 'anna packer', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'internal', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'external freight', deliveryDate: '2026-06-26' }).length, 1);
+  assert.equal(filterOrders(orders, { q: '0068573012' }).length, 1);
+  assert.equal(filterOrders(orders, { q: '0068573900' }).length, 1);
   assert.equal(filterOrders(orders, { q: '06:00', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'salmon', deliveryDate: '2026-06-25' }).length, 1);
   assert.equal(filterOrders(orders, { q: 'fresh market', deliveryDate: '2026-06-26' }).length, 0);
@@ -436,4 +500,17 @@ test('requests four freight page copies for DB Schenker Finland International', 
 
   assert.equal(snapshot.documents.length, 3);
   assert.equal(freight.pageCopies, 4);
+});
+
+test('DSV Finland keeps four freight copies when the supplier name changes', () => {
+  const order = {
+    orderNumber: '900004',
+    context: { distributorNo: 50063993, distributorName: 'DSV Finland', deliveryMethod: 47 },
+    missingTypes: [],
+    documents: { freight: { name: 'freight900004.pdf', source: 'primary', generation: '1', type: 'freight' } }
+  };
+  const plan = planFreightDocumentSelection([order], 'dsv-finland', ['900004']);
+  const [snapshot] = freightOnlyPrintSnapshots([order], plan);
+  assert.deepEqual(snapshot.documents.map((document) => document.type), ['freight']);
+  assert.equal(snapshot.documents[0].pageCopies, 4);
 });
