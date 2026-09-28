@@ -684,3 +684,37 @@ are verification needs, not claims that the running system is broken.
   the transfer-size ratio above is from the local mock. No nShift call,
   physical print, production deploy, freight job, scheduler, or local agent
   change was made.
+
+## 2026-09-28 demo printing deployment (verified runtime)
+
+- Repository commit `6082d4815b132a89bc9cf72ca1d116ca77e55f02` is on
+  `origin/demo`. Cloud Build `9fa0f71b-3bdd-4ac8-9dbb-744474d5ed26` passed
+  `npm ci`, `npm test`, image build/push, and deployment. It was started
+  **manually** via the enabled `printward-demo` trigger: the push did not start
+  an automatic build during observation. Do not claim push-to-demo automation
+  is currently verified; diagnose event delivery before relying on it.
+- `printward-demo` in `visma-274514/europe-north1` serves revision
+  `printward-demo-00014-9vd` at 100% traffic, with image tag matching the commit.
+  Runtime identity: `printward-demo-runtime@visma-274514.iam.gserviceaccount.com`.
+  It has Datastore User at project scope, object read on `pdf-service-bucket`,
+  and accessor on the existing SQL and demo-login secrets. The demo namespace
+  is `printward_demo`; this is not an IAM isolation boundary.
+- Verified runtime flags: `PRINTWARD_READ_ONLY=false`,
+  `PRINTWARD_AUTH_ENABLED=true`, `PRINTWARD_DASHBOARD_PRINT_ENABLED=true`,
+  `PRINTWARD_LEGACY_PRINT_ENABLED=false`, `NSHIFT_FETCH_ENABLED=false`.
+  Existing SQL/GCS/VPC configuration was preserved. Cloud Run permits
+  `allUsers` to invoke **only** this demo service, behind Printward's own login.
+  Anonymous requests to `/printward-dashboard.html` redirect (HTTP 303) to
+  `/login`; `/login` returns 200; `/api/health` returns 401. The password value
+  was not read or recorded. No live nShift or physical print test was run.
+- The legacy `Print defaults` page still shows selectable document types, but
+  the new dashboard print endpoint ignores those browser defaults and validates
+  separate slip-plus-attachment vs. freight-only packets on the server. The
+  Windows Print Agent has not changed: its `staple` option only requests
+  collation through SumatraPDF; physical stapling depends on the selected
+  Windows printer queue/driver. Verify a small real packet and a freight-only
+  packet on the office printer before trusting finishing behavior. Do not
+  assume the checkbox disables a queue's default staple.
+- `printward-prod`, freight jobs, schedulers, and Windows agents were not
+  modified. A login-and-live-data check from a user PC is still needed; the
+  anonymous checks above do not prove SQL or printer-agent connectivity.
