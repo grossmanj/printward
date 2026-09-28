@@ -510,6 +510,9 @@ Printward uses Datastore mode for Cloud Run state when `STATE_STORE=datastore`; 
 
 The overview at `/printward-dashboard.html` enables real printing only when
 `PRINTWARD_READ_ONLY=false` and `PRINTWARD_DASHBOARD_PRINT_ENABLED=true`.
+Set `PRINTWARD_LOGIN_LANDING_PAGE=dashboard` on the demo service to send
+successful logins and visits to `/` to this overview. The default remains the
+legacy `/` page in other environments.
 The browser must also reach the **local** Print Agent at `http://127.0.0.1:37951`;
 use **Skrivarinställningar** in the overview to test the agent and select a
 printer. A real print requires an explicit confirmation. The server checks the

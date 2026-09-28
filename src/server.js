@@ -298,7 +298,7 @@ async function handleAuthRoute(req, res, requestUrl, auth) {
 
   if (req.method === 'GET') {
     if (isAuthenticatedRequest(req, auth)) {
-      res.writeHead(303, { location: '/', 'cache-control': 'no-store' });
+      res.writeHead(303, { location: auth.landingPath || '/', 'cache-control': 'no-store' });
       res.end();
       return true;
     }
@@ -312,7 +312,7 @@ async function handleAuthRoute(req, res, requestUrl, auth) {
     const password = form.get('password') || '';
     if (safeEqual(username, auth.username) && safeEqual(password, auth.password)) {
       res.writeHead(303, {
-        location: '/',
+        location: auth.landingPath || '/',
         'set-cookie': sessionCookie(req, auth),
         'cache-control': 'no-store'
       });
@@ -1668,6 +1668,12 @@ export function createRequestHandler(config = loadConfig()) {
       }
 
       if (config.auth.enabled && requireLogin(req, res, requestUrl, config.auth)) {
+        return;
+      }
+
+      if (requestUrl.pathname === '/' && config.auth?.landingPath && config.auth.landingPath !== '/') {
+        res.writeHead(303, { location: config.auth.landingPath, 'cache-control': 'no-store' });
+        res.end();
         return;
       }
 

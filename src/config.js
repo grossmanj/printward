@@ -50,7 +50,8 @@ export function loadConfig(env = process.env) {
       password: env.PRINTWARD_LOGIN_PASSWORD || '',
       sessionSecret: env.PRINTWARD_SESSION_SECRET || env.PRINTWARD_LOGIN_PASSWORD || '',
       cookieName: env.PRINTWARD_COOKIE_NAME || 'printward_session',
-      maxAgeSeconds: Number(env.PRINTWARD_SESSION_MAX_AGE_SECONDS || 43_200)
+      maxAgeSeconds: Number(env.PRINTWARD_SESSION_MAX_AGE_SECONDS || 43_200),
+      landingPath: env.PRINTWARD_LOGIN_LANDING_PAGE === 'dashboard' ? '/printward-dashboard.html' : '/'
     },
     stateStore: {
       mode: env.STATE_STORE || 'json',

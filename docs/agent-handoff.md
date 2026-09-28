@@ -690,9 +690,12 @@ are verification needs, not claims that the running system is broken.
 - Repository commit `6082d4815b132a89bc9cf72ca1d116ca77e55f02` is on
   `origin/demo`. Cloud Build `9fa0f71b-3bdd-4ac8-9dbb-744474d5ed26` passed
   `npm ci`, `npm test`, image build/push, and deployment. It was started
-  **manually** via the enabled `printward-demo` trigger: the push did not start
-  an automatic build during observation. Do not claim push-to-demo automation
-  is currently verified; diagnose event delivery before relying on it.
+  **manually** via the enabled `printward-demo` trigger while the push build
+  had not yet appeared in the history view. The push did in fact start build
+  `966b0071` for the same commit, and a subsequent normal push of docs commit
+  `9af1abd6debc85ee3039a982f3d4d9ae122f0bd4` automatically started and
+  completed build `88b81192`. Demo push-to-deploy automation is verified;
+  allow for Cloud Build history/event-display latency.
 - `printward-demo` in `visma-274514/europe-north1` serves revision
   `printward-demo-00014-9vd` at 100% traffic, with image tag matching the commit.
   Runtime identity: `printward-demo-runtime@visma-274514.iam.gserviceaccount.com`.
@@ -718,3 +721,9 @@ are verification needs, not claims that the running system is broken.
 - `printward-prod`, freight jobs, schedulers, and Windows agents were not
   modified. A login-and-live-data check from a user PC is still needed; the
   anonymous checks above do not prove SQL or printer-agent connectivity.
+- Successful login previously redirected to `/`, the old Printward view, even
+  when the operator requested `/printward-dashboard.html`. The demo-specific
+  `PRINTWARD_LOGIN_LANDING_PAGE=dashboard` setting redirects both login success
+  and an authenticated `/` visit to the new overview. Its default remains `/`
+  outside demo. Verify this setting on the next deployed revision before giving
+  out the new PC link.

@@ -277,6 +277,25 @@ test('auth blocks app/API until login succeeds', async (t) => {
   assert.equal(authedHealth.status, 200);
 });
 
+test('demo login and root land on the dashboard without changing the default home', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_LOGIN_LANDING_PAGE: 'dashboard' });
+  const login = await request(handler, '/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  assert.equal(login.status, 303);
+  assert.equal(login.headers.get('location'), '/printward-dashboard.html');
+
+  const cookie = login.headers.get('set-cookie');
+  const root = await request(handler, '/', { headers: { cookie } });
+  assert.equal(root.status, 303);
+  assert.equal(root.headers.get('location'), '/printward-dashboard.html');
+
+  const dashboard = await request(handler, '/printward-dashboard.html', { headers: { cookie } });
+  assert.equal(dashboard.status, 200);
+});
+
 test('read-only service blocks print jobs but permits freight preflight', async (t) => {
   const handler = await createAuthHandler(t, { PRINTWARD_READ_ONLY: 'true' });
   const login = await request(handler, '/login', {
