@@ -622,7 +622,7 @@ are verification needs, not claims that the running system is broken.
   designing one requires a separate production identity, image repository,
   config-preservation plan, rollout checks, and owner approval.
 
-## 2026-09-28 dashboard transfer-size optimization (local work)
+## 2026-09-28 dashboard transfer-size optimization and demo deployment
 
 - An authenticated Cloud Shell proxy measurement of the existing demo showed a
   forced date-scoped dispatch refresh at 4.77 seconds and a cached freight
@@ -638,5 +638,17 @@ are verification needs, not claims that the running system is broken.
 - Node 22.18.0 `node --test` passed 86/86, including compression negotiation,
   unchanged decoded JSON, and static asset round-trip tests. The bundled npm
   installation is incomplete, so `npm test` could not run; the equivalent
-  test command was used. No GitHub push, Cloud Run deployment, nShift call,
-  printer action, or production change was made in this step.
+  test command was used locally.
+- After the owner's explicit demo-deploy request, fetched `origin/demo`, then
+  committed and normally pushed `793bae40c771f1076a013fa04eae31a31971d831`.
+  `git ls-remote` confirmed the remote `demo` SHA matched while `main` remained
+  at `646949a4b4a8b0d458cc924475e3aace8a545f99`. Automatic Cloud Build
+  `ca59471e-d503-42f8-b037-74756fdc538f` passed install, `npm test`, image
+  build/push, and `deploy-demo`. Cloud Run revision `printward-demo-00009-7hp`
+  received 100% traffic from the `793bae4` image. The Cloud Run configuration
+  still showed `PRINTWARD_READ_ONLY=true` and `NSHIFT_FETCH_ENABLED=false`,
+  and the private Cloud Shell preview loaded live dashboard counts afterward.
+  Browser-observed live compression size has not yet been measured separately;
+  the transfer-size ratio above is from the local mock. No nShift call,
+  physical print, production deploy, freight job, scheduler, or local agent
+  change was made.

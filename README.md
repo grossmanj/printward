@@ -456,6 +456,9 @@ fetches. Its original VPC connector, Secret Manager references, Datastore
 namespace, IAM-only authentication, resource settings, and traffic policy were
 preserved. This is a live-data **read-only** demo, not a test of physical
 printing. See the handoff for the exact configuration and checks.
+The 2026-09-28 `demo` push of `793bae4` automatically deployed response
+compression in revision `printward-demo-00009-7hp`; see the handoff for build
+and verification evidence.
 
 The production branch is `main`, not `master`; no Printward production trigger
 was found in this project's global, `europe-north1`, or `europe-west1` Cloud
