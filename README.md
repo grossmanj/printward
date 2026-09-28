@@ -434,23 +434,32 @@ permission on `printward-demo` only and write permission on a separate
 `printward-demo` Artifact Registry repository; it must not have access to
 `printward-prod` or its image repository.
 
-As of 2026-09-25, the trigger is **not active**. Installation `26894157` has
-been granted repository access, but linking `grossmanj/printward` to the
-existing `grossmanj-github` connection fails with `repo grossmanj/printward is
-not accessible to the OAuth token`. The connection's stored authorizer is the
-GitHub user `grossmanj`; that user must renew/fix its Cloud Build GitHub
-authorization before the repository resource and trigger can be created.
-The production branch is `main`, not `master`; no
-Printward production trigger was found in this project's global,
-`europe-north1`, or `europe-west1` Cloud Build trigger lists. Do not rely on a
-merge-to-master production deployment without verifying the owner's actual
-pipeline. The current `printward-demo` service still points at demo Visma
-`F9992` and GCS prefix `9992/`; it has **not yet** been switched to live data.
-The local `demo` branch is also not on GitHub yet: this computer currently
-lacks GitHub credentials for a normal push. Its local commit and the exact
-pre-deployment service settings are recorded in the handoff.
+As of 2026-09-28, the regional trigger `printward-demo`
+(`706c2e16-41df-4c65-b47e-b7e25feed905`) is active. It watches only
+`^demo$` in the linked `grossmanj-printward` repository on the
+`printward-github` connection and uses `cloudbuild.demo.yaml`. Its dedicated
+build identity, `printward-demo-build@visma-274514.iam.gserviceaccount.com`,
+can write only to the `printward-demo` image repository and deploy only the
+`printward-demo` Cloud Run service; its project-level role is limited to
+Cloud Logging writer. The remote `demo` branch exists. The first build,
+`2396da32-afb6-42eb-abca-5471e85d1653`, succeeded from commit
+`996182341bd957f4df0b194b5e897f3c32908404`.
 
-Demo defaults:
+The existing `printward-demo` service now reads live Visma `F0002` and GCS
+prefixes `2/` and `freight/2/`, using the dedicated
+`printward-dashboard-readonly` runtime identity. `PRINTWARD_READ_ONLY=true`
+blocks print-job creation, and `NSHIFT_FETCH_ENABLED=false` prevents nShift
+fetches. Its original VPC connector, Secret Manager references, Datastore
+namespace, IAM-only authentication, resource settings, and traffic policy were
+preserved. This is a live-data **read-only** demo, not a test of physical
+printing. See the handoff for the exact configuration and checks.
+
+The production branch is `main`, not `master`; no Printward production trigger
+was found in this project's global, `europe-north1`, or `europe-west1` Cloud
+Build trigger lists. Production automation requires a separate review and is
+not configured here.
+
+Historical deploy-script demo defaults (not the current service settings):
 
 ```text
 SERVICE=printward-demo

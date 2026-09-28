@@ -563,3 +563,61 @@ are verification needs, not claims that the running system is broken.
 - Chrome QA against the local read-only mock on port 3103 verified Back and
   Forward on a Tidig lookup, plus close-button and Esc navigation. No deploy
   or physical print was performed.
+
+## 2026-09-28 `demo` branch Cloud Build and read-only live-data deployment
+
+- Fetched `origin/main` before publishing. GitHub Desktop was authenticated as
+  `moongoaz`; committed the dashboard work on local `demo` as
+  `996182341bd957f4df0b194b5e897f3c32908404`, then used a normal Publish
+  Branch operation. `git ls-remote --heads origin demo main` confirmed the
+  remote `demo` SHA matched and `main` stayed at
+  `646949a4b4a8b0d458cc924475e3aace8a545f99`. Node 22.18.0 tests passed
+  84/84, and `git diff --check` was clean.
+- The earlier `grossmanj-github` OAuth blocker was resolved by a separate
+  `printward-github` Cloud Build connection in `europe-north1`, with linked
+  repository resource `grossmanj-printward` for `grossmanj/printward`.
+  Created regional trigger `printward-demo`
+  (`706c2e16-41df-4c65-b47e-b7e25feed905`): repository push branch regex
+  exactly `^demo$`, build config `cloudbuild.demo.yaml`, no approval gate,
+  build service account `printward-demo-build@visma-274514.iam.gserviceaccount.com`.
+  The separate Docker Artifact Registry repository `printward-demo` was
+  created in `europe-north1`.
+- That build account has `roles/artifactregistry.writer` only on the
+  `printward-demo` image repository, `roles/run.developer` only on the
+  `printward-demo` Cloud Run service, `roles/iam.serviceAccountUser` only on
+  `printward-dashboard-readonly@visma-274514.iam.gserviceaccount.com`, and
+  project-level `roles/logging.logWriter` for Cloud Build logs. A project IAM
+  query confirmed logging writer is its only project-level role. No
+  production deploy or production-image permission was granted.
+- Before changing the service, inspected revision `printward-demo-00005-69f`:
+  runtime SA `webshop-api`, `F9992`, GCS prefix `9992/`, SQL secret refs
+  `SQL_UID:latest` and `SQL_PWD:latest`, Datastore namespace `printward`,
+  VPC connector `connector-cloudrun-sql` with private-ranges-only egress,
+  IAM-only access, 1 vCPU / 512 MiB, startup CPU boost, max scale 100,
+  100% latest traffic. Updated **only `printward-demo`** with additive
+  environment changes and runtime SA `printward-dashboard-readonly`:
+  `SQLSERVER_DATABASE=F0002`, `GCS_PREFIX=2/`,
+  `FREIGHT_GCS_BUCKET=pdf-service-bucket`, `FREIGHT_GCS_PREFIX=freight/2/`,
+  `REQUIRED_DOCUMENT_TYPES=packingSlip,attachment`,
+  `VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight`,
+  `PRINTWARD_READ_ONLY=true`, `PRINTWARD_AUTH_ENABLED=false`,
+  `NSHIFT_FETCH_ENABLED=false`, `ORDERS_CACHE_WARMUP=false`. Kept the same
+  bucket, SQL host/port, Secret Manager references, Datastore namespace,
+  VPC, ingress/authentication, and resource/traffic settings. The temporary
+  configuration-only revision was `printward-demo-00006-dxt`.
+- Manually ran the new trigger on remote `demo` SHA `9961823`; Cloud Build
+  `2396da32-afb6-42eb-abca-5471e85d1653` succeeded. Cloud Run revision
+  `printward-demo-00007-88n` serves 100% of `printward-demo` from the image
+  `europe-north1-docker.pkg.dev/visma-274514/printward-demo/app:996182341bd957f4df0b194b5e897f3c32908404`
+  with the read-only runtime SA. Authenticated `/api/health` returned HTTP 200,
+  `readOnly: true`, live GCS prefixes `2/` and `freight/2/`, and SQL context
+  available. Authenticated `/api/orders?deliveryDate=2026-09-25` returned
+  259 orders with SQL context available; no customer details were logged in
+  this handoff. An authenticated empty `POST /api/print-jobs` returned HTTP
+  403, confirming the code-level write guard. No nShift call or physical
+  print was used as a test. The SQL user's database-level SELECT-only grant
+  remains unverified; keep the runtime read-only identity and print guard.
+- `printward-prod`, freight jobs, schedulers, and the local printer agent
+  were not modified. Production has no Printward merge-to-`main` trigger;
+  designing one requires a separate production identity, image repository,
+  config-preservation plan, rollout checks, and owner approval.
