@@ -118,6 +118,70 @@ test('dashboard static assets are compressed for gzip-capable browsers', async (
   assert.deepEqual(gunzipSync(compressed.bytes), plain.bytes);
 });
 
+test('dashboard print endpoint requires an explicit feature flag and a fresh eligible group', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_AUTH_ENABLED: 'false' });
+  const body = JSON.stringify({
+    kind: 'dispatch', panelId: 'early', deliveryDate: '2026-06-25', orderNumbers: ['1001']
+  });
+  const blocked = await request(handler, '/api/dashboard/print-jobs', { method: 'POST', body });
+  assert.equal(blocked.status, 403);
+
+  const enabled = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true', PRINTWARD_LEGACY_PRINT_ENABLED: 'false'
+  });
+  const legacy = await request(enabled, '/api/print-jobs', { method: 'POST', body });
+  assert.equal(legacy.status, 403);
+  const wrongGroup = await request(enabled, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({
+      kind: 'freight', panelId: 'best-transport', deliveryDate: '2026-06-25', orderNumbers: ['1001']
+    })
+  });
+  assert.equal(wrongGroup.status, 409);
+
+  const created = await request(enabled, '/api/dashboard/print-jobs', { method: 'POST', body });
+  assert.equal(created.status, 201);
+  const payload = await created.json();
+  assert.deepEqual(payload.manifest.orders.map((order) => order.documents.map((document) => document.type)), [
+    ['packingSlip', 'attachment']
+  ]);
+  assert.equal(payload.job.notes, 'Dashboard dispatch: early (2026-06-25)');
+});
+
+test('dashboard freight print job contains only verified Kyl sections', async (t) => {
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false',
+    PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    PRINTWARD_LEGACY_PRINT_ENABLED: 'false',
+    VISIBLE_DOCUMENT_TYPES: 'pallet,packingSlip,attachment,freight'
+  });
+  const response = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: 'freight', panelId: 'kyl-and-frys',
+      deliveryDate: '2026-06-24', orderNumbers: ['900001']
+    })
+  });
+  assert.equal(response.status, 201);
+  const payload = await response.json();
+  assert.deepEqual(payload.manifest.orders.map((section) => section.sectionType), [
+    'pallet-label-1', 'pallet-label-2', 'frozen-freight', 'cooling-freight'
+  ]);
+  assert.ok(payload.manifest.orders.every((section) => section.documents.every((document) => document.type === 'pallet')));
+
+  const dsv = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: 'freight', panelId: 'dsv-finland',
+      deliveryDate: '2026-06-24', orderNumbers: ['900004']
+    })
+  });
+  assert.equal(dsv.status, 201);
+  const dsvPayload = await dsv.json();
+  assert.deepEqual(dsvPayload.manifest.orders[0].documents.map((document) => [document.type, document.pageCopies]), [
+    ['freight', 4]
+  ]);
+});
+
 async function openEventStream(handler, pathOrUrl, options = {}) {
   const url = new URL(pathOrUrl, 'http://127.0.0.1');
   const req = new Readable({

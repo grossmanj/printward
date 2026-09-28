@@ -314,4 +314,58 @@ export function summarizeChainPanels(orders = []) {
   return panels;
 }
 
+// Re-evaluate every dashboard print selection on the server against fresh order
+// context. Browser counters and checkboxes are never authorization to print.
+export function planDashboardPrintSelection(orders = [], kind, panelId, orderNumbers = []) {
+  if (!Array.isArray(orderNumbers) || orderNumbers.length < 1 || orderNumbers.length > 200) {
+    return { valid: false, errors: ['Select between 1 and 200 orders.'], orders: [] };
+  }
+  const numbers = orderNumbers.map((value) => String(value).trim());
+  if (numbers.some((value) => !/^\d+$/.test(value)) || new Set(numbers).size !== numbers.length) {
+    return { valid: false, errors: ['Order numbers must be unique numeric values.'], orders: [] };
+  }
+
+  if (kind === 'freight') {
+    const plan = planFreightDocumentSelection(orders, panelId, numbers);
+    if (!plan.valid) return { ...plan, kind };
+    const alreadyPrinted = plan.orders.filter((item) => item.document.printStatus === 'printed');
+    if (alreadyPrinted.length) {
+      return { valid: false, errors: alreadyPrinted.map((item) => `Order ${item.orderNumber} is already printed.`), orders: [] };
+    }
+    return { ...plan, kind, documentTypes: ['pallet', 'freight'] };
+  }
+
+  const items = kind === 'dispatch'
+    ? summarizeOwnDispatch(orders).slots[panelId]?.orders
+    : kind === 'chain'
+      ? summarizeChainPanels(orders)[panelId]?.orders
+      : null;
+  if (!items) return { valid: false, errors: ['Unknown print group.'], orders: [] };
+
+  const selected = new Set(numbers);
+  const selectedItems = items.filter(({ order }) => selected.has(String(order.orderNumber)));
+  const found = new Set(selectedItems.map(({ order }) => String(order.orderNumber)));
+  const errors = numbers.filter((number) => !found.has(number))
+    .map((number) => `Order ${number} does not belong to this print group and date.`);
+  for (const item of selectedItems) {
+    const { order, ready } = item;
+    const documents = [order.documents?.packingSlip, order.documents?.attachment];
+    if (!ready || documents.some((document) => !document)) {
+      errors.push(`Order ${order.orderNumber} is not ready with both required documents.`);
+    } else if (documents.every((document) => document.printStatus === 'printed')) {
+      errors.push(`Order ${order.orderNumber} is already printed.`);
+    }
+  }
+  if (errors.length) return { valid: false, errors, orders: [] };
+
+  return {
+    valid: true,
+    kind,
+    panelId,
+    errors: [],
+    documentTypes: ['packingSlip', 'attachment'],
+    orders: selectedItems.map(({ order }) => ({ orderNumber: String(order.orderNumber) }))
+  };
+}
+
 export const freightPanelRules = Object.freeze({ ROUTES, SUPPLIERS });

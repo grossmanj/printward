@@ -20,6 +20,8 @@ let simulationStorage;
 try { simulationStorage = window.sessionStorage; } catch { simulationStorage = null; }
 const virtualPrinter = createVirtualPrinter(simulationStorage);
 let simulationEnabled = false;
+let realPrintingEnabled = false;
+let activeRealPrint = false;
 let proposedSimulation = null;
 let lookupSort = 'priority';
 const statuses = { search: 'all', alla: 'all', plock: 'blocked', uppdaterade: 'reprint', saknade: 'missing' };
@@ -106,15 +108,113 @@ function setVirtualCount(card, count) {
 function setVirtualQuick(card, label, items, note = '', verifyFreightPanelId = null) {
   const button = card?.parentElement?.querySelector(':scope > .quick-print');
   if (!button) return;
+  const kind = card.dataset.freightPanel ? 'freight' : card.dataset.dispatchSlot ? 'dispatch' : card.dataset.chainPanel ? 'chain' : null;
+  const panelId = card.dataset.freightPanel || card.dataset.dispatchSlot || card.dataset.chainPanel;
   button.dataset.originalLabel ||= button.textContent;
   button.textContent = simulationEnabled ? 'Simulera utskrift' : button.dataset.originalLabel;
-  button.disabled = !simulationEnabled || items.length === 0;
-  button.title = simulationEnabled ? items.length ? `Virtuell utskrift · ${items.length} dokument` : 'Inga dokument kvar att simulera' : 'Riktiga utskrifter är spärrade i läsläget';
+  button.disabled = (!simulationEnabled && !realPrintingEnabled) || items.length === 0 || activeRealPrint;
+  button.title = simulationEnabled ? items.length ? `Virtuell utskrift · ${items.length} dokument` : 'Inga dokument kvar att simulera'
+    : realPrintingEnabled ? 'Skickar riktiga dokument till den lokala Print Agent' : 'Riktiga utskrifter är spärrade i läsläget';
   button.onclick = (event) => {
     event.stopPropagation();
-    if (verifyFreightPanelId) openVerifiedFreightSimulation(label, items, verifyFreightPanelId);
-    else openVirtualPrint(label, items, note);
+    if (simulationEnabled) {
+      if (verifyFreightPanelId) openVerifiedFreightSimulation(label, items, verifyFreightPanelId);
+      else openVirtualPrint(label, items, note);
+    } else if (realPrintingEnabled && kind) printDashboardItems(kind, panelId, label, items);
   };
+}
+
+function printDefaults() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('printward:defaults') || '{}'); } catch { /* Use safe defaults. */ }
+  const agent = new URL(saved.agentUrl || 'http://127.0.0.1:37951');
+  if (agent.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(agent.hostname)) {
+    throw new Error('Print Agent-adressen måste vara lokal på denna dator. Kontrollera skrivarinställningarna.');
+  }
+  return {
+    ...saved,
+    agentUrl: agent.origin,
+    copies: Math.min(20, Math.max(1, Number(saved.copies || 1))),
+    printerName: String(saved.printerName || ''),
+    duplex: saved.duplex !== false,
+    staple: saved.staple !== false
+  };
+}
+
+function fillPrinterSettings() {
+  let defaults;
+  try { defaults = printDefaults(); }
+  catch {
+    // Let the operator correct a stale or invalid locally saved agent URL.
+    defaults = { agentUrl: 'http://127.0.0.1:37951', printerName: '', copies: 1, duplex: true, staple: true };
+  }
+  document.querySelector('#printUser').value = localStorage.getItem('printward:user') || 'operator';
+  document.querySelector('#printAgentUrl').value = defaults.agentUrl;
+  document.querySelector('#printPrinter').value = defaults.printerName;
+  document.querySelector('#printCopies').value = defaults.copies;
+  document.querySelector('#printDuplex').checked = defaults.duplex;
+  document.querySelector('#printStaple').checked = defaults.staple;
+}
+
+async function testPrinterSettings() {
+  const status = document.querySelector('#printAgentStatus');
+  status.textContent = 'Kontrollerar agenten på denna dator…';
+  try {
+    const agent = new URL(document.querySelector('#printAgentUrl').value);
+    if (agent.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(agent.hostname)) {
+      throw new Error('Adressen måste vara lokal på denna dator.');
+    }
+    const response = await fetch(`${agent.origin}/health`, { signal: AbortSignal.timeout(3000) });
+    const details = response.ok ? await response.json() : {};
+    if (!details.canPrint) throw new Error('Agenten svarar, men skrivarbryggan är inte redo.');
+    const printers = await fetch(`${agent.origin}/printers`, { signal: AbortSignal.timeout(3000) });
+    const printerPayload = printers.ok ? await printers.json() : {};
+    document.querySelector('#printPrinterList').innerHTML = (printerPayload.printers || [])
+      .map((printer) => `<option value="${escapeHtml(printer.name)}"></option>`).join('');
+    status.textContent = `Print Agent är redo · ${(printerPayload.printers || []).length} skrivarköer hittades.`;
+  } catch (error) { status.textContent = `Agenten är inte redo: ${error.message}`; }
+}
+
+async function printDashboardItems(kind, panelId, label, items) {
+  if (!realPrintingEnabled || activeRealPrint || !items.length) return;
+  const orderNumbers = [...new Set(items.map((item) => String(item.orderNumber)))];
+  if (!window.confirm(`Skriva ut ${orderNumbers.length} order i ${label} på den här datorns skrivare? Detta är en riktig utskrift.`)) return;
+  activeRealPrint = true;
+  showToast('Kontrollerar lokal skrivare och aktuella PDF-dokument…');
+  try {
+    const defaults = printDefaults();
+    const health = await fetch(`${defaults.agentUrl}/health`, { signal: AbortSignal.timeout(3000) });
+    const agent = health.ok ? await health.json() : null;
+    if (!agent?.canPrint) throw new Error('Print Agent är inte redo på den här datorn. Öppna skrivarinställningarna och testa agenten.');
+    const response = await fetch('/api/dashboard/print-jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind, panelId, orderNumbers, deliveryDate: deliveryDate.value,
+        user: localStorage.getItem('printward:user') || 'operator',
+        printerName: defaults.printerName,
+        options: defaults
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error((payload.errors || [payload.error || 'Utskriftsjobbet kunde inte skapas.']).join(' '));
+    const printed = await fetch(`${defaults.agentUrl}/print`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...payload.manifest, user: localStorage.getItem('printward:user') || 'operator',
+        printerName: defaults.printerName, options: defaults })
+    });
+    const result = await printed.json().catch(() => ({}));
+    if (!printed.ok) throw new Error(result.error || 'Print Agent kunde inte skriva ut. Kontrollera jobbet innan du försöker igen.');
+    showToast(`${orderNumbers.length} order skickade till skrivaren. Uppdaterar status…`);
+    await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
+    if (statuses[activeView]) await loadOrders(activeView, true);
+  } catch (error) {
+    showToast(`Utskrift stoppad: ${error.message}`);
+  } finally {
+    activeRealPrint = false;
+    refreshSimulationDisplays();
+  }
 }
 
 function virtualPacketRows(items) {
@@ -183,12 +283,17 @@ function updateSimulationStatus() {
   const orders = new Set(items.map((item) => `${item.deliveryDate}|${item.orderNumber}`));
   document.body.classList.toggle('simulation-active', simulationEnabled);
   document.querySelector('.read-only-banner').textContent = simulationEnabled
-    ? 'TESTLÄGE · inga riktiga utskrifter' : 'Endast läsning · inga utskrifter';
+    ? 'TESTLÄGE · inga riktiga utskrifter' : realPrintingEnabled ? 'DEMO · riktig utskrift aktiv' : 'Endast läsning · inga utskrifter';
   simulationToggle.textContent = simulationEnabled ? 'Stoppa testläge' : 'Starta virtuell skrivare';
   simulationToggle.setAttribute('aria-pressed', String(simulationEnabled));
   simulationStatus.textContent = simulationEnabled
     ? `${orders.size} order · ${items.length} ${items.length === 1 ? 'dokument simulerat' : 'dokument simulerade'} i denna webbläsare. Riktiga statusar är oförändrade.`
-    : 'Testläget är avstängt. Riktiga utskrifter är alltid spärrade i den här vyn.';
+    : realPrintingEnabled ? 'Riktiga utskrifter är aktiva för verifierade dokument. Print Agent måste vara igång på denna dator.'
+      : 'Testläget är avstängt. Riktiga utskrifter är spärrade i den här vyn.';
+  document.querySelector('#detailsPrintNote').textContent = simulationEnabled
+    ? 'Virtuellt testläge: ingen riktig utskrift eller statusändring.'
+    : realPrintingEnabled ? 'DEMO: Skriv ut order skickar verkliga dokument till den här datorns Print Agent.'
+      : 'Läsvy: utskrift aktiveras först efter att regler och testorder är godkända.';
   document.querySelector('#simulationHistory').hidden = jobs.length === 0;
   document.querySelector('#simulationReset').hidden = jobs.length === 0;
 }
@@ -204,8 +309,16 @@ function refreshSimulationDisplays() {
   if (activeView === 'chains' && chainPayload) renderChainList();
   if ((activeView === 'pickups' || activeView === 'staff') && pickupPayload) renderPickupList(pickupPayload, activeView === 'staff');
 }
+async function loadPrintCapability() {
+  try {
+    const response = await fetch('/api/health');
+    const payload = response.ok ? await response.json() : {};
+    realPrintingEnabled = payload.dashboardPrintingEnabled === true;
+  } catch { realPrintingEnabled = false; }
+  refreshSimulationDisplays();
+}
 function lookupSortControl() {
-  return '<span class="read-only">Endast läsning</span>';
+  return `<span class="read-only">${realPrintingEnabled ? 'Demo · utskrift aktiv' : 'Endast läsning'}</span>`;
 }
 function documentPreviewLink(document) {
   const params = new URLSearchParams({ name: document.name, source: document.source || 'primary' });
@@ -368,7 +481,7 @@ function renderFreightList() {
     return `<li><strong>Order ${escapeHtml(section.orderNumber)} · ${label}</strong><small>${pages}${copies}</small></li>`;
   }).join('');
   const selection = panel.documentTracking
-    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla med dokument i listan</label><span>${selectedItems.length} valda av ${panel.ready} med dokument</span><button id="reviewFreightSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska fraktdokument</button><button class="print-selected" type="button" ${simulationEnabled && selectedItems.length ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
+    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla med dokument i listan</label><span>${selectedItems.length} valda av ${panel.ready} med dokument</span><button id="reviewFreightSelection" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
     : '';
   const review = panel.documentTracking && freightReviewOpen && selectedItems.length
     ? `<section class="dispatch-review freight-review" aria-label="Granskning av fraktdokument"><h2>Valda fraktdokument · ${selectedItems.length} order</h2><p>Servern kontrollerar grupp, PDF-sidor och ordning mot aktuell data. Kylt och fryst visas som egna bokningsrader men väljs per order. Inga följesedlar ingår och ingen utskrift startas.</p>${freightReviewPending ? '<p>Kontrollerar PDF-sidor…</p>' : freightPlanError ? `<p class="freight-plan-error">${escapeHtml(freightPlanError)}</p>` : `<ol>${reviewRows}</ol><h3>Verifierad sidordning</h3><ol>${reviewSections}</ol>`}</section>`
@@ -377,7 +490,8 @@ function renderFreightList() {
   if (panel.documentTracking) {
     ordersView.querySelector('.print-selected').addEventListener('click', () => {
       const items = selectedItems.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType]));
-      openVerifiedFreightSimulation(`${name} · valda fraktdokument`, items, activeFreightPanel);
+      if (simulationEnabled) openVerifiedFreightSimulation(`${name} · valda fraktdokument`, items, activeFreightPanel);
+      else printDashboardItems('freight', activeFreightPanel, `${name} · valda fraktdokument`, items);
     });
     ordersView.querySelector('#selectAllFreightReady').addEventListener('change', (event) => {
       for (const { order } of selectableVisible) {
@@ -523,7 +637,7 @@ function renderDispatchList() {
   const review = dispatchReviewOpen && selectedItems.length
     ? `<section class="dispatch-review" aria-label="Granskning av vald bunt"><h2>Vald bunt · ${selectedItems.length} order</h2><p>Sorterad efter orderns DelPri och körsätt. Varje order består av följesedel + partibilaga. Detta är endast en granskning; ingen utskrift startas.</p><ol>${reviewRows}</ol></section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order har följesedel och partibilaga och är färdigplockade. Klicka på ett körsätt för att granska alla order i den bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen. Ingen riktig utskrift från denna vy.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${simulationEnabled && selectedItems.length ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order har följesedel och partibilaga och är färdigplockade. Klicka på ett körsätt för att granska alla order i den bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
   ordersView.querySelectorAll('[data-dispatch-group]').forEach((button) => button.addEventListener('click', () => {
     const expanded = button.getAttribute('aria-expanded') !== 'true';
     dispatchGroupOpenOverrides.set(button.dataset.dispatchGroup, expanded);
@@ -531,9 +645,10 @@ function renderDispatchList() {
     button.nextElementSibling.hidden = !expanded;
   }));
   ordersView.querySelector('.print-selected').addEventListener('click', () => {
-    openVirtualPrint(`${dispatchNames[activeDispatchSlot]} · valda följesedlar`,
-      selectedItems.flatMap(({ order }) => packetCandidates(order)),
+    const items = selectedItems.flatMap(({ order }) => packetCandidates(order));
+    if (simulationEnabled) openVirtualPrint(`${dispatchNames[activeDispatchSlot]} · valda följesedlar`, items,
       'Följesedel och partibilaga visas tillsammans per order i leveransordning.');
+    else printDashboardItems('dispatch', activeDispatchSlot, `${dispatchNames[activeDispatchSlot]} · valda följesedlar`, items);
   });
   ordersView.querySelector('#selectAllDispatchReady').addEventListener('change', (event) => {
     for (const { order } of readyVisible) {
@@ -666,15 +781,16 @@ function renderChainList() {
     const selectable = ready && !printed && packetCandidates(order).length > 0;
     return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-chain-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled'} ${selectable && selectedChainOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || '–')}</td><td>${escapeHtml(chainTransportNames[transport])}</td><td><span class="order-status ${virtualStatus ? 'simulated' : printed ? 'ready' : 'missing'}">${escapeHtml(state)}</span></td></tr>`;
   }).join('');
-  const selection = `<div class="dispatch-selection"><label><input id="selectAllChainReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedChainOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera klara som behöver utskrift</label><span>${selectedItems.length} valda</span><button id="reviewChainSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${simulationEnabled && selectedItems.length ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`;
+  const selection = `<div class="dispatch-selection"><label><input id="selectAllChainReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedChainOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera klara som behöver utskrift</label><span>${selectedItems.length} valda</span><button id="reviewChainSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`;
   const review = chainReviewOpen && selectedItems.length
     ? `<section class="dispatch-review"><h2>Valda följesedlar · ${selectedItems.length} order</h2><p>Klicka på en orderrad för att granska följesedel och partibilaga som PDF. Ingen utskrift startas.</p><ol>${selectedItems.map(({ order }) => `<li><strong>Order ${escapeHtml(order.orderNumber)} · ${escapeHtml(order.context?.customerName || '–')}</strong><small>Följesedel: ${escapeHtml(statusLabel(order.documents?.packingSlip?.printStatus))} · Partibilaga: ${escapeHtml(statusLabel(order.documents?.attachment?.printStatus))}</small></li>`).join('')}</ol></section>`
     : '';
   ordersView.innerHTML = `<header><div><h1>${chainNames[activeChainPanel]}</h1><p>${panel.printed} av ${panel.total} order har både följesedel och partibilaga utskrivna. Röda siffran visar order som återstår. Okända körsätt markeras separat.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Transport</th><th>Dokumentstatus</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga kedjeorder för valt datum och sökning.</div>'}${review}`;
   ordersView.querySelector('.print-selected').addEventListener('click', () => {
-    openVirtualPrint(`${chainNames[activeChainPanel]} · valda följesedlar`,
-      selectedItems.flatMap(({ order }) => packetCandidates(order)),
+    const items = selectedItems.flatMap(({ order }) => packetCandidates(order));
+    if (simulationEnabled) openVirtualPrint(`${chainNames[activeChainPanel]} · valda följesedlar`, items,
       'Följesedel och partibilaga visas tillsammans per order.');
+    else printDashboardItems('chain', activeChainPanel, `${chainNames[activeChainPanel]} · valda följesedlar`, items);
   });
   ordersView.querySelector('#selectAllChainReady').addEventListener('change', (event) => {
     for (const { order } of selectableVisible) {
@@ -734,17 +850,19 @@ function simulationSelectionForOrder(order) {
     const item = panel.orders?.find((entry) => String(entry.order.orderNumber) === number);
     if (item && panel.documentTracking) return {
       label: `${freightNames[panelId]} · order ${number}`,
-      panelId,
+      kind: 'freight', panelId,
       items: pendingOrderDocuments(item.order, [item.documentType].filter(Boolean))
     };
   }
-  for (const slot of Object.values(dispatchPayload?.slots || {})) {
+  for (const [panelId, slot] of Object.entries(dispatchPayload?.slots || {})) {
     const item = slot.orders?.find((entry) => String(entry.order.orderNumber) === number);
-    if (item) return { label: `Följesedlar · order ${number}`, items: item.ready ? packetCandidates(item.order) : [] };
+    if (item) return { label: `Följesedlar · order ${number}`, kind: 'dispatch', panelId,
+      items: item.ready ? packetCandidates(item.order) : [] };
   }
-  for (const panel of Object.values(chainPayload?.panels || {})) {
+  for (const [panelId, panel] of Object.entries(chainPayload?.panels || {})) {
     const item = panel.orders?.find((entry) => String(entry.order.orderNumber) === number);
-    if (item) return { label: `Kedjeföljesedlar · order ${number}`, items: item.ready && !item.printed ? packetCandidates(item.order) : [] };
+    if (item) return { label: `Kedjeföljesedlar · order ${number}`, kind: 'chain', panelId,
+      items: item.ready && !item.printed ? packetCandidates(item.order) : [] };
   }
   return { label: `Order ${number}`, items: [] };
 }
@@ -759,11 +877,13 @@ function openOrderDetails(order) {
   ].join('') || (context.freightConsignmentNumbers?.length ? `<dt>Bokningsnummer</dt><dd>${escapeHtml(context.freightConsignmentNumbers.join(', '))}</dd>` : '');
   const documentRows = documents.length ? documents.map((document) => `<li><span>${escapeHtml(documentNames[document.type] || document.typeLabel || document.type || 'Dokument')} · ${documentPreviewLink(document)}</span><span class="document-status ${simulated(order.orderNumber, document.type) ? 'simulated' : escapeHtml(document.printStatus || '')}">${escapeHtml(simulated(order.orderNumber, document.type) ? 'Simulerat utskriven' : statusLabel(document.printStatus))}</span></li>`).join('') : '<li><span>Inga dokument hittades</span></li>';
   title.textContent = `Order ${order.orderNumber}`;
-  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || 'Okänd kund')}</dd><dt>Ort</dt><dd>${escapeHtml(context.deliveryPostalArea || '–')}</dd><dt>Leverans</dt><dd>${escapeHtml(context.deliveryDate || '–')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Körsätt</dt><dd>${escapeHtml(context.deliveryMethodName || '–')}${context.deliveryMethod ? ` · rutt ${escapeHtml(context.deliveryMethod)}` : ''}</dd><dt>Orderstatus</dt><dd>${escapeHtml(statusLabel(order.packetStatus))}</dd>${bookingRows}</dl><div><strong>Dokument</strong><ul class="order-documents">${documentRows}</ul></div><button class="quick-print" type="button" ${simulationEnabled && simulationSelection.items.length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
+  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || 'Okänd kund')}</dd><dt>Ort</dt><dd>${escapeHtml(context.deliveryPostalArea || '–')}</dd><dt>Leverans</dt><dd>${escapeHtml(context.deliveryDate || '–')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Körsätt</dt><dd>${escapeHtml(context.deliveryMethodName || '–')}${context.deliveryMethod ? ` · rutt ${escapeHtml(context.deliveryMethod)}` : ''}</dd><dt>Orderstatus</dt><dd>${escapeHtml(statusLabel(order.packetStatus))}</dd>${bookingRows}</dl><div><strong>Dokument</strong><ul class="order-documents">${documentRows}</ul></div><button class="quick-print" type="button" ${(simulationEnabled || realPrintingEnabled) && simulationSelection.items.length && !activeRealPrint ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
   detail.querySelector('.quick-print').addEventListener('click', () => {
     dialog.close();
-    if (simulationSelection.panelId) openVerifiedFreightSimulation(simulationSelection.label, simulationSelection.items, simulationSelection.panelId);
-    else openVirtualPrint(simulationSelection.label, simulationSelection.items);
+    if (simulationEnabled) {
+      if (simulationSelection.kind === 'freight') openVerifiedFreightSimulation(simulationSelection.label, simulationSelection.items, simulationSelection.panelId);
+      else openVirtualPrint(simulationSelection.label, simulationSelection.items);
+    } else printDashboardItems(simulationSelection.kind, simulationSelection.panelId, simulationSelection.label, simulationSelection.items);
   });
   dialog.showModal();
 }
@@ -1010,6 +1130,35 @@ document.querySelector('#simulationConfirm').addEventListener('click', () => {
   if (statuses[activeView]) loadOrders(activeView);
   showToast(`${new Set(job.items.map((item) => item.orderNumber)).size} order simulerade · inga riktiga utskrifter.`);
 });
+const printerSettingsDialog = document.querySelector('#printerSettingsDialog');
+document.querySelector('#printerSettingsButton').addEventListener('click', () => {
+  fillPrinterSettings();
+  document.querySelector('#printAgentStatus').textContent = 'Agenten är inte testad ännu.';
+  printerSettingsDialog.showModal();
+});
+document.querySelector('#printerSettingsClose').addEventListener('click', () => printerSettingsDialog.close());
+document.querySelector('#testPrintAgent').addEventListener('click', testPrinterSettings);
+document.querySelector('#printerSettingsForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  try {
+    const agent = new URL(document.querySelector('#printAgentUrl').value);
+    if (agent.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(agent.hostname)) {
+      throw new Error('Print Agent-adressen måste vara lokal på denna dator.');
+    }
+    const previous = JSON.parse(localStorage.getItem('printward:defaults') || '{}');
+    localStorage.setItem('printward:defaults', JSON.stringify({
+      ...previous,
+      agentUrl: agent.origin,
+      printerName: document.querySelector('#printPrinter').value.trim(),
+      copies: Math.min(20, Math.max(1, Number(document.querySelector('#printCopies').value || 1))),
+      duplex: document.querySelector('#printDuplex').checked,
+      staple: document.querySelector('#printStaple').checked
+    }));
+    localStorage.setItem('printward:user', document.querySelector('#printUser').value.trim() || 'operator');
+    printerSettingsDialog.close();
+    showToast('Skrivarinställningarna är sparade på denna dator.');
+  } catch (error) { showToast(`Kunde inte spara: ${error.message}`); }
+});
 simulationDialog.addEventListener('close', () => { proposedSimulation = null; });
 document.querySelector('#backToDashboard').addEventListener('click', closeLookup);
 dashboardSort.addEventListener('change', (event) => {
@@ -1117,6 +1266,7 @@ document.querySelector('.active-date + .control-button').addEventListener('click
 deliveryDate.value = todayInStockholm();
 if (history.state?.printwardLookup) restoreLookup(history.state.printwardLookup);
 updateSimulationStatus();
+loadPrintCapability();
 loadFreightDashboard();
 loadDispatchDashboard();
 loadChainDashboard();

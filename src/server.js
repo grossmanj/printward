@@ -29,7 +29,7 @@ import {
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore } from './stateStore.js';
-import { planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
+import { planDashboardPrintSelection, planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -1067,6 +1067,7 @@ async function handleApi(req, res, requestUrl, context) {
     sendJson(res, 200, {
       ok: true,
       readOnly: config.readOnly,
+      dashboardPrintingEnabled: !config.readOnly && config.dashboardPrintingEnabled,
       mode: config.gcs.mode,
       bucket: config.gcs.bucket || null,
       prefix: config.gcs.prefix || '',
@@ -1194,6 +1195,69 @@ async function handleApi(req, res, requestUrl, context) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/dashboard/print-jobs') {
+    if (!config.dashboardPrintingEnabled) {
+      sendJson(res, 403, { error: 'Dashboard printing is not enabled on this service.' });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const deliveryDate = String(body.deliveryDate || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+      sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
+      return;
+    }
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, {
+      deliveryDate,
+      refresh: true
+    });
+    if (contextStatus?.available === false) {
+      sendJson(res, 503, { error: 'The order source is unavailable; printing is stopped.' });
+      return;
+    }
+    const plan = planDashboardPrintSelection(
+      filterOrders(orders, { deliveryDate }), body.kind, body.panelId, body.orderNumbers
+    );
+    if (!plan.valid) {
+      sendJson(res, 409, { error: 'The print selection is no longer valid.', errors: plan.errors });
+      return;
+    }
+    const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+    const selectedOrders = plan.orders.map(({ orderNumber }) => byNumber.get(orderNumber));
+    let snapshots;
+    try {
+      if (body.kind === 'freight') {
+        await verifyFreightPacket(storage, selectedOrders, plan);
+        snapshots = freightOnlyPrintSnapshots(selectedOrders, plan);
+      } else {
+        snapshots = await buildPrintSnapshots(storage, selectedOrders, ['packingSlip', 'attachment']);
+        const expected = new Set(['packingSlip', 'attachment']);
+        if (snapshots.length !== selectedOrders.length || snapshots.some((snapshot) =>
+          snapshot.documents.length !== 2 || snapshot.documents.some((document) => !expected.has(document.type)))) {
+          throw new Error('A slip/attachment packet could not be verified for every selected order.');
+        }
+      }
+    } catch (error) {
+      sendJson(res, 409, { error: `PDF verification failed: ${error.message}` });
+      return;
+    }
+
+    const job = await store.createJob({
+      createdBy: body.user,
+      printerName: body.printerName || '',
+      options: body.options || {},
+      orders: snapshots,
+      notes: `Dashboard ${body.kind}: ${body.panelId} (${deliveryDate})`,
+      callbackToken: randomToken()
+    });
+    eventHub.broadcast('print-job-created', {
+      jobId: job.id,
+      status: job.status,
+      orderNumbers: jobOrderNumbers(job)
+    });
+    sendJson(res, 201, { job, manifest: buildManifest(req, job) });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/dashboard/dispatch') {
     const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
@@ -1313,6 +1377,10 @@ async function handleApi(req, res, requestUrl, context) {
   }
 
   if (req.method === 'POST' && pathname === '/api/print-jobs') {
+    if (!config.legacyPrintingEnabled) {
+      sendJson(res, 403, { error: 'Use the verified dashboard print flow on this service.' });
+      return;
+    }
     const body = await readJsonBody(req);
     const orderNumbers = Array.isArray(body.orderNumbers) ? body.orderNumbers.map(String) : [];
     const selectedTypes = normalizedDocumentTypesForConfig(body.documentTypes || body.options?.documentTypes, config);
@@ -1383,6 +1451,10 @@ async function handleApi(req, res, requestUrl, context) {
 
   const retryMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/retry$/);
   if (req.method === 'POST' && retryMatch) {
+    if (!config.legacyPrintingEnabled) {
+      sendJson(res, 403, { error: 'Legacy print retries are disabled on this service.' });
+      return;
+    }
     const body = await readJsonBody(req);
     const previousJob = await store.getJob(retryMatch[1]);
     if (!previousJob) {

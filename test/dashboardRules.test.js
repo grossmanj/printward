@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planFreightDocumentSelection, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
+import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planDashboardPrintSelection, planFreightDocumentSelection, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
+
+test('dashboard print plan rejects wrong groups, unfinished slips, and already printed freight', () => {
+  const slip = (printStatus = 'pending') => ({ name: 'slip.pdf', type: 'packingSlip', printStatus });
+  const attachment = (printStatus = 'pending') => ({ name: 'attachment.pdf', type: 'attachment', printStatus });
+  const orders = [
+    { orderNumber: '101', context: { deliveryMethod: 1, distributorNo: 0, dispatchPriority: 6, customerChainNo: 41 }, documents: { packingSlip: slip(), attachment: attachment() } },
+    { orderNumber: '102', context: { deliveryMethod: 1, distributorNo: 0, dispatchPriority: 6 }, packingBlocked: true, documents: { packingSlip: slip(), attachment: attachment() } },
+    { orderNumber: '103', context: { deliveryMethod: 47, distributorNo: 50063993, dispatchPriority: 7 }, documents: { freight: { name: 'freight.pdf', type: 'freight', printStatus: 'printed' } } }
+  ];
+  assert.deepEqual(planDashboardPrintSelection(orders, 'dispatch', 'early', ['101']).orders.map((item) => item.orderNumber), ['101']);
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'morning', ['101']).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['102']).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'chain', 'sushi-yama', ['101']).valid, true);
+  assert.equal(planDashboardPrintSelection(orders, 'freight', 'dsv-finland', ['103']).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'freight', 'best-transport', ['103']).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['101', '101']).valid, false);
+});
 
 test('places routes 25 and 49 in Eriksson before the Kyl & Frys supplier rule', () => {
   assert.equal(freightPanelForOrder({ context: { deliveryMethod: 25, routeGroup: 4, distributorNo: 7331697 } }), 'eriksson');

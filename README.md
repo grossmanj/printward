@@ -506,6 +506,35 @@ Google IAM identity tokens. Verify the intended access path for the deployed ser
 
 Printward uses Datastore mode for Cloud Run state when `STATE_STORE=datastore`; local development still defaults to the JSON file under `data/`.
 
+### Dashboard printing in the demo service
+
+The overview at `/printward-dashboard.html` enables real printing only when
+`PRINTWARD_READ_ONLY=false` and `PRINTWARD_DASHBOARD_PRINT_ENABLED=true`.
+The browser must also reach the **local** Print Agent at `http://127.0.0.1:37951`;
+use **Skrivarinställningar** in the overview to test the agent and select a
+printer. A real print requires an explicit confirmation. The server checks the
+selected orders against fresh Visma context, validates the PDF packet, then
+issues a job-scoped manifest for the agent. The virtual printer remains separate
+and never changes actual print status.
+
+Only verified dashboard groups are printable: own-vehicle Tidig/FM/EM slips
+with one attachment per order; Sushi Yama and ChopChop slips with attachments;
+and Kyl & Frys, DSV Finland, and Eriksson freight documents/labels without
+slips. Best Transport, other carriers, returns, pickup/courier/taxi, and other
+customers remain view-only until their document rules are verified. For the
+demo service, keep `PRINTWARD_LEGACY_PRINT_ENABLED=false` so the older generic
+job endpoint cannot bypass these dashboard-specific checks, and keep
+`NSHIFT_FETCH_ENABLED=false` to avoid live nShift calls while testing.
+
+Before enabling writes on `printward-demo`, use a demo-specific Datastore
+namespace and a dedicated runtime service account. Datastore User IAM is
+project-scoped even with a separate namespace, so the namespace is logical
+separation, not a security boundary. Do not reuse the production service
+account or assume a normal Git push changes runtime flags, secrets, or Cloud
+Run authentication. Cloud Run IAM-only access must be deliberately changed to
+public access only after Printward's own password login and a demo-only secret
+are configured. The PC's Print Agent must be installed and reachable separately.
+
 Script defaults are not a record of deployed state. Review existing environment
 variables and secrets before redeploying: the scripts use replacement flags, and
 the web script sets Datastore namespace `printward` for both demo and production.

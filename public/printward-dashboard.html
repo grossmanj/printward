@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Printward – läsvy</title>
+    <title>Printward – översikt</title>
     <link rel="stylesheet" href="/printward-dashboard.css">
   </head>
   <body>
@@ -36,6 +36,7 @@
       <section class="simulation-toolbar" aria-label="Virtuell skrivare">
         <button id="simulationToggle" type="button" aria-pressed="false">Starta virtuell skrivare</button>
         <span id="simulationStatus">Testläget är avstängt. Riktiga utskrifter är alltid spärrade i den här vyn.</span>
+        <button id="printerSettingsButton" type="button">Skrivarinställningar</button>
         <button id="simulationHistory" type="button" hidden>Visa testkö</button>
         <button id="simulationReset" type="button" hidden>Rensa simulering</button>
       </section>
@@ -97,7 +98,7 @@
       <section id="ordersView" class="orders-view" hidden aria-live="polite"></section>
     </main>
 
-    <dialog id="detailsDialog"><form method="dialog"><button class="dialog-close" aria-label="Stäng">×</button><h2 id="dialogTitle"></h2><div id="dialogDetail"></div><p class="dialog-note">Läsvy: utskrift aktiveras först efter att regler och testorder är godkända.</p><button class="dialog-button">Stäng</button></form></dialog>
+    <dialog id="detailsDialog"><form method="dialog"><button class="dialog-close" aria-label="Stäng">×</button><h2 id="dialogTitle"></h2><div id="dialogDetail"></div><p class="dialog-note" id="detailsPrintNote">Läsvy: utskrift aktiveras först efter att regler och testorder är godkända.</p><button class="dialog-button">Stäng</button></form></dialog>
     <dialog id="simulationDialog" aria-labelledby="simulationTitle">
       <button class="dialog-close" id="simulationClose" type="button" aria-label="Stäng simulering">×</button>
       <h2 id="simulationTitle">Virtuell utskrift</h2>
@@ -105,6 +106,21 @@
       <ol id="simulationItems"></ol>
       <p class="dialog-note">Endast ett test i denna webbläsare. Ingen PDF skickas till skrivare eller nShift och riktig utskriftsstatus ändras inte.</p>
       <div class="simulation-dialog-actions"><button id="simulationCancel" type="button">Avbryt</button><button id="simulationConfirm" class="dialog-button" type="button">Simulera utskrift</button></div>
+    </dialog>
+    <dialog id="printerSettingsDialog" aria-labelledby="printerSettingsTitle">
+      <form id="printerSettingsForm">
+        <button class="dialog-close" id="printerSettingsClose" type="button" aria-label="Stäng skrivarinställningar">×</button>
+        <h2 id="printerSettingsTitle">Skrivarinställningar för denna dator</h2>
+        <p class="dialog-note">Print Agent körs lokalt på din PC. Inställningarna sparas bara i den här webbläsaren.</p>
+        <label>Användare <input id="printUser" autocomplete="username" value="operator"></label>
+        <label>Print Agent-adress <input id="printAgentUrl" value="http://127.0.0.1:37951"></label>
+        <label>Skrivarkö <input id="printPrinter" list="printPrinterList" placeholder="Datorns standardskrivare"><datalist id="printPrinterList"></datalist></label>
+        <label>Antal kopior <input id="printCopies" type="number" min="1" max="20" value="1"></label>
+        <label class="settings-check"><input id="printDuplex" type="checkbox" checked> Dubbelsidigt</label>
+        <label class="settings-check"><input id="printStaple" type="checkbox" checked> Häfta per order (kräver rätt skrivarkö/driver)</label>
+        <p id="printAgentStatus" class="dialog-note" role="status">Agenten är inte testad ännu.</p>
+        <div class="printer-settings-actions"><a href="/install-print-agent.ps1" download="install-print-agent.ps1">Installera Print Agent på Windows</a><button id="testPrintAgent" type="button">Testa agent</button><button class="dialog-button" type="submit">Spara</button></div>
+      </form>
     </dialog>
     <div id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/printward-dashboard.js"></script>

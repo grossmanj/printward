@@ -622,6 +622,38 @@ are verification needs, not claims that the running system is broken.
   designing one requires a separate production identity, image repository,
   config-preservation plan, rollout checks, and owner approval.
 
+## 2026-09-28 verified dashboard print flow (repository changes)
+
+- The overview now has a feature-gated real-print path using a local PC Print
+  Agent and an explicit physical-print confirmation. `POST
+  /api/dashboard/print-jobs` re-reads order context, validates membership,
+  document readiness, and current print status, checks the exact PDFs, and
+  creates a job-scoped manifest. The existing virtual printer remains separate.
+- Permitted groups: Tidig/FM/EM own-vehicle slips plus attachment, Sushi
+  Yama/ChopChop slips plus attachment, and Kyl & Frys/DSV Finland/Eriksson
+  freight-only documents or label sections. Best, other carriers, returns,
+  pickups, Swish invoices, and DocSmt-based customers have no verified
+  physical-print mapping and stay disabled. Do not imply otherwise in UI.
+- Feature flags default safe: `PRINTWARD_DASHBOARD_PRINT_ENABLED=false` and
+  `PRINTWARD_LEGACY_PRINT_ENABLED=true` (unchanged production behavior).
+  Demo printing requires the dashboard flag true, `PRINTWARD_READ_ONLY=false`,
+  and the legacy flag false. Keep `NSHIFT_FETCH_ENABLED=false` for no-call tests.
+- The Print Agent on each PC must be installed/running and reachable at a
+  loopback URL; operator/printer/copies/duplex/staple settings are per-browser.
+  No test should call live nShift or a physical printer automatically. The
+  existing Windows agent has not been updated by these repository changes.
+- Environment isolation: when demo becomes writable, change its Datastore
+  namespace away from `printward` and use a dedicated demo runtime identity.
+  `roles/datastore.user` is granted at project scope, not namespace scope:
+  namespace isolation is application-level only. Keep `printward-prod`
+  unchanged. Only the demo service should be made public behind its own app
+  login secret; verify unauthorized access redirects to `/login` before sharing
+  the URL. A push to `demo` by itself does not adjust runtime env/IAM.
+- At this handoff entry's creation, code is local and **not yet deployed**.
+  Update this section with the exact commit, Cloud Build ID, Cloud Run revision,
+  auth/health checks, and any unresolved limitations after deployment. Never
+  record password values, customer PDFs, or job tokens.
+
 ## 2026-09-28 dashboard transfer-size optimization and demo deployment
 
 - An authenticated Cloud Shell proxy measurement of the existing demo showed a

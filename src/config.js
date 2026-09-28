@@ -42,6 +42,8 @@ export function loadConfig(env = process.env) {
     ordersCacheMs: Number(env.ORDERS_CACHE_MS || 60_000),
     ordersCacheWarmup: String(env.ORDERS_CACHE_WARMUP || 'true').toLowerCase() !== 'false',
     readOnly: String(env.PRINTWARD_READ_ONLY || 'false').toLowerCase() === 'true',
+    dashboardPrintingEnabled: String(env.PRINTWARD_DASHBOARD_PRINT_ENABLED || 'false').toLowerCase() === 'true',
+    legacyPrintingEnabled: String(env.PRINTWARD_LEGACY_PRINT_ENABLED || 'true').toLowerCase() !== 'false',
     auth: {
       enabled: String(env.PRINTWARD_AUTH_ENABLED || (env.PRINTWARD_LOGIN_PASSWORD ? 'true' : 'false')).toLowerCase() === 'true',
       username: env.PRINTWARD_LOGIN_USER || 'operator',
