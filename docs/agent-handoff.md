@@ -696,8 +696,8 @@ are verification needs, not claims that the running system is broken.
   `9af1abd6debc85ee3039a982f3d4d9ae122f0bd4` automatically started and
   completed build `88b81192`. Demo push-to-deploy automation is verified;
   allow for Cloud Build history/event-display latency.
-- `printward-demo` in `visma-274514/europe-north1` serves revision
-  `printward-demo-00014-9vd` at 100% traffic, with image tag matching the commit.
+- `printward-demo` in `visma-274514/europe-north1` first served print-enabled
+  revision `printward-demo-00014-9vd` with image tag matching `6082d48`.
   Runtime identity: `printward-demo-runtime@visma-274514.iam.gserviceaccount.com`.
   It has Datastore User at project scope, object read on `pdf-service-bucket`,
   and accessor on the existing SQL and demo-login secrets. The demo namespace
@@ -725,5 +725,12 @@ are verification needs, not claims that the running system is broken.
   when the operator requested `/printward-dashboard.html`. The demo-specific
   `PRINTWARD_LOGIN_LANDING_PAGE=dashboard` setting redirects both login success
   and an authenticated `/` visit to the new overview. Its default remains `/`
-  outside demo. Verify this setting on the next deployed revision before giving
-  out the new PC link.
+  outside demo. Commit `294102b4a45de823c4edca21fd79e7469269a4ab`
+  includes this fix and a focused auth regression test (local Node 22.18.0:
+  90/90 passed). Cloud Build `f5de70b1-dbec-4906-b2d1-7fd5b221ea1b` passed
+  all steps and deployed it. At verification, revision
+  `printward-demo-00017-hpr` served 100% traffic with that image and
+  `PRINTWARD_LOGIN_LANDING_PAGE=dashboard`, `PRINTWARD_READ_ONLY=false`, and
+  `PRINTWARD_DASHBOARD_PRINT_ENABLED=true`. Anonymous dashboard access still
+  redirected to `/login`. The post-login redirect is covered by the regression
+  test, but a real PC login remains to be checked by the user.
