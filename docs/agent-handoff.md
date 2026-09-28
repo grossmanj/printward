@@ -156,6 +156,12 @@ printer validation was performed for this documentation update.
   starting Node, and may create no agent log. The launcher regression is covered by
   `test/windows-installer.test.js`; a Windows PC reinstallation/health check remains
   to be verified. Pushing or deploying the web app does not update PCs.
+- Installer fix `53ba479` passed all 91 local Node tests on 2026-09-28. The
+  `printward-demo` trigger ran both automatically (`7a18ed92`) and once manually
+  (`000a3cf5`); both Cloud Build runs succeeded. Cloud Run revision
+  `printward-demo-00021-t7z` was healthy and serving 100% of demo traffic after
+  deployment. Production was not changed. Windows agent health and physical
+  printer behavior still require an on-PC check.
 - Earlier documentation recorded nShift credentials exposed in a prior conversation.
   Rotation status is unverified; confirm with the owner before production use.
 
