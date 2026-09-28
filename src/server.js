@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
@@ -57,13 +58,27 @@ function visibleDocumentTypes(config) {
   );
 }
 
+function acceptsGzip(req) {
+  return String(req?.headers?.['accept-encoding'] || '').split(',').some((entry) => {
+    const [encoding, ...parameters] = entry.trim().split(';');
+    if (encoding.toLowerCase() !== 'gzip') return false;
+    const quality = parameters.find((parameter) => /^\s*q\s*=/i.test(parameter));
+    return !quality || Number(quality.split('=')[1]) > 0;
+  });
+}
+
 function sendJson(res, statusCode, payload) {
-  const body = JSON.stringify(payload, null, 2);
+  const body = Buffer.from(JSON.stringify(payload));
+  const compressed = body.length >= 1024 && acceptsGzip(res.req);
+  const output = compressed ? gzipSync(body) : body;
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
+    'cache-control': 'no-store',
+    'content-length': String(output.length),
+    vary: 'Accept-Encoding',
+    ...(compressed ? { 'content-encoding': 'gzip' } : {})
   });
-  res.end(body);
+  res.end(output);
 }
 
 function sendHtml(res, statusCode, body, headers = {}) {
@@ -1533,11 +1548,18 @@ async function serveStatic(req, res, requestUrl, staticDir) {
   try {
     const body = await fs.readFile(filePath);
     const ext = path.extname(filePath);
+    const compressed = body.length >= 1024
+      && ['.html', '.css', '.js', '.json', '.svg'].includes(ext)
+      && acceptsGzip(req);
+    const output = compressed ? gzipSync(body) : body;
     res.writeHead(200, {
       'content-type': MIME_TYPES[ext] || 'application/octet-stream',
-      'cache-control': 'no-store'
+      'cache-control': 'no-store',
+      'content-length': String(output.length),
+      vary: 'Accept-Encoding',
+      ...(compressed ? { 'content-encoding': 'gzip' } : {})
     });
-    res.end(body);
+    res.end(output);
   } catch (error) {
     if (error.code === 'ENOENT') {
       res.writeHead(404);

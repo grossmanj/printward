@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
 
 import { loadConfig, projectRoot } from '../src/config.js';
 import { createRequestHandler } from '../src/server.js';
@@ -56,6 +57,7 @@ async function request(handler, pathOrUrl, options = {}) {
     }
   });
   res.statusCode = 200;
+  res.req = req;
   res.writeHead = (statusCode, headerMap = {}) => {
     res.statusCode = statusCode;
     for (const [name, value] of Object.entries(headerMap)) {
@@ -72,6 +74,7 @@ async function request(handler, pathOrUrl, options = {}) {
   const responseBody = Buffer.concat(chunks);
   return {
     status: res.statusCode,
+    bytes: responseBody,
     headers: {
       get(name) {
         const value = headers[String(name).toLowerCase()];
@@ -82,6 +85,38 @@ async function request(handler, pathOrUrl, options = {}) {
     text: async () => responseBody.toString('utf8')
   };
 }
+
+test('large JSON responses use gzip only when the client accepts it', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_AUTH_ENABLED: 'false' });
+  const endpoint = '/api/orders?deliveryDate=2026-06-24';
+  const plain = await request(handler, endpoint);
+  const compressed = await request(handler, endpoint, { headers: { 'accept-encoding': 'gzip, deflate' } });
+  const declined = await request(handler, endpoint, { headers: { 'accept-encoding': 'gzip;q=0, deflate' } });
+
+  assert.equal(plain.status, 200);
+  assert.equal(plain.headers.get('content-encoding'), null);
+  assert.equal(compressed.headers.get('content-encoding'), 'gzip');
+  assert.equal(compressed.headers.get('vary'), 'Accept-Encoding');
+  assert.ok(compressed.bytes.length < plain.bytes.length);
+  assert.deepEqual(JSON.parse(gunzipSync(compressed.bytes)), await plain.json());
+  assert.equal(declined.headers.get('content-encoding'), null);
+  assert.equal(declined.bytes.toString('utf8'), plain.bytes.toString('utf8'));
+});
+
+test('dashboard static assets are compressed for gzip-capable browsers', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_AUTH_ENABLED: 'false' });
+  const plain = await request(handler, '/printward-dashboard.js');
+  const compressed = await request(handler, '/printward-dashboard.js', {
+    headers: { 'accept-encoding': 'gzip, deflate' }
+  });
+
+  assert.equal(plain.status, 200);
+  assert.equal(compressed.status, 200);
+  assert.equal(compressed.headers.get('content-encoding'), 'gzip');
+  assert.equal(compressed.headers.get('vary'), 'Accept-Encoding');
+  assert.ok(compressed.bytes.length < plain.bytes.length);
+  assert.deepEqual(gunzipSync(compressed.bytes), plain.bytes);
+});
 
 async function openEventStream(handler, pathOrUrl, options = {}) {
   const url = new URL(pathOrUrl, 'http://127.0.0.1');

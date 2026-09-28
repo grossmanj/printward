@@ -621,3 +621,22 @@ are verification needs, not claims that the running system is broken.
   were not modified. Production has no Printward merge-to-`main` trigger;
   designing one requires a separate production identity, image repository,
   config-preservation plan, rollout checks, and owner approval.
+
+## 2026-09-28 dashboard transfer-size optimization (local work)
+
+- An authenticated Cloud Shell proxy measurement of the existing demo showed a
+  forced date-scoped dispatch refresh at 4.77 seconds and a cached freight
+  response at 0.13 seconds. The freight JSON response was 697,194 bytes and
+  remained uncompressed even with `Accept-Encoding: gzip`; Cloud Run did not
+  add compression. These timings include the temporary Cloud Shell proxy and
+  do not isolate Visma, GCS, or browser rendering.
+- `sendJson` now emits compact JSON and gzip-compresses responses above 1 KiB
+  only when the client accepts it; text static assets receive the same
+  treatment. Cache policy remains `no-store`, and PDF bytes are untouched.
+  A local mock freight response fell from 9,905 to 1,429 transferred bytes
+  with gzip. This reduces transfer size, not the underlying SQL/GCS work.
+- Node 22.18.0 `node --test` passed 86/86, including compression negotiation,
+  unchanged decoded JSON, and static asset round-trip tests. The bundled npm
+  installation is incomplete, so `npm test` could not run; the equivalent
+  test command was used. No GitHub push, Cloud Run deployment, nShift call,
+  printer action, or production change was made in this step.

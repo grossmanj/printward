@@ -49,6 +49,9 @@ buttons starts a print job.
 The date picker uses the Europe/Stockholm calendar date. Date-scoped SQL reads
 page through all matching order numbers in batches (including returns and
 pickups), rather than silently stopping after the first 500.
+Large JSON responses and static text assets are sent as compact, gzip-compressed
+responses when the browser accepts gzip. Document/PDF responses and the
+read-only rules are unchanged; cold date loads can still wait on Visma and GCS.
 The Eriksson panel is the Kyl & Frys supplier `7331697` with **order**
 `DelMt=25` (Eriksson) or `DelMt=49` (K&F Danmark 13:00); it uses the same
 document type and sorts by the order's `DelPri`.
