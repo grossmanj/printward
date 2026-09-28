@@ -382,6 +382,8 @@ export function filterOrders(orders, { q = '', status = 'all', deliveryDate = ''
         context.customerNo,
         context.customerName,
         context.deliveryName,
+        context.deliveryPostalCode,
+        context.deliveryPostalArea,
         context.orderNote,
         context.ourReference,
         context.yourReference,

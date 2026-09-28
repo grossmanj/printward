@@ -8,7 +8,7 @@ verifieras mot verkliga Visma-data innan riktig utskrift aktiveras.
 | Grupp | Identifiering | Status |
 | --- | --- | --- |
 | Kyl & Frys | Leverantörsnummer `7331697`, utom Eriksson | Fraktsedel |
-| Eriksson | **Orderns** `DelMt=25` och leverantörsnummer `7331697` | Egen fraktsedelsgrupp, samma dokumentflöde som Kyl & Frys |
+| Eriksson | **Orderns** `DelMt=25` eller `49` (`K&F Danmark 13:00`) och leverantörsnummer `7331697` | Egen fraktsedelsgrupp, samma dokumentflöde som Kyl & Frys |
 | DSV Finland | Leverantörsnummer `50063993`; orderns `DelMt=47` eller `48` | Fraktsedel |
 | Best Transport | Leverantörsnummer `55058127` | Visa avgångar, ingen utskrift ännu |
 | Jansen Logistic, Tyskland | Orderns `DelMt=52`; hämtar måndag och torsdag | Oklart dokumentbehov – visa först, ingen utskrift ännu |
@@ -16,7 +16,7 @@ verifieras mot verkliga Visma-data innan riktig utskrift aktiveras.
 ## Prioritet för gruppering
 
 Eriksson måste kontrolleras före den generella Kyl & Frys-regeln. Annars
-skulle `DelMt=25` hamna fel eftersom den använder samma leverantörsnummer.
+skulle `DelMt=25` och `49` hamna fel eftersom de använder samma leverantörsnummer.
 `Ord.Gr2` är inte körsättet och får inte användas för den här uppdelningen.
 Fraktlistorna sorteras efter orderns `DelPri`, sedan `DelMt`, sedan ordernummer.
 
@@ -24,7 +24,7 @@ Att få **Eriksson** tryckt på nShifts fraktsedel och etikett är en separat,
 ännu ej genomförd ändring. Ändra inte den gemensamma Kyl & Frys-mallen globalt:
 det skulle även märka vanliga Kyl & Frys-sändningar. Kontrollera först ett
 verkligt Eriksson-dokument och om Visma–nShift-integrationen kan skicka en
-villkorad text för `DelMt=25` till en anpassad dokument-/etikettlayout.
+villkorad text för `DelMt=25/49` till en anpassad dokument-/etikettlayout.
 Ägaren undersöker hos nShift om en separat mall kan skapas och väljas enbart
 för Eriksson. Frågor att bekräfta: samma leverantörsnummer, val av mall från
 integrationen, märkning på **både fraktsedel och etikett**, och att vanliga
@@ -167,6 +167,32 @@ Riktig fraktdokumentutskrift begränsas först till de befintliga
 Visma–nShift-flödena för Kyl & Frys och DSV Finland. Eriksson grupperas
 separat i dashboarden men använder samma Kyl & Frys-flöde. Best Transport och
 Övriga Åkerier är tills vidare enbart avgångsöversikter.
+
+## Nästa prioritet efter verifierad manuell utskrift: automatisk fraktdokumentutskrift
+
+När nya Printward fungerar med manuell utskrift ska automatisk utskrift vid
+orderstopp vara **första nya funktionen att utreda och bygga**. Inget SQL-jobb,
+schema eller automatisk utskrift är aktiverat ännu.
+
+- Fastställ orderstopp per körsätt/avgång och leveransdag. Det får inte vara en
+  enda körning för alla åkerier: vissa Kyl & Frys-avgångar har orderstopp samma
+  dag. Inkludera först de verifierade fraktgrupperna Kyl & Frys, DSV Finland
+  och Eriksson (`DelMt=25/49`); Best och Övriga Åkerier saknar fortfarande
+  verifierat utskriftsflöde.
+- En schemalagd körning (SQL Server Agent eller separat Printward-jobb beslutas
+  senare) ska bara *be Printward* skapa utskriftsjobb. SQL får inte själv märka
+  dokument som utskrivna eller anropa nShift/skrivare direkt.
+- Läs om aktuell order, PDF och utskriftsstatus precis före köläggning. Hoppa
+  över exakt dokumentversion som redan är `printed`. Reservera samma
+  order/dokumenttyp/källa/objekt/generation atomiskt så manuell och automatisk
+  körning inte kan skapa dubbla jobb samtidigt. Ett jobb som bara är `created`
+  är inte utskrivet; `printed` ska sättas först efter bekräftelse från agenten.
+- Fel och avbrott ska vara synliga och säkert kunna provas igen. Börja med
+  förhandsvisning/dry-run av *vad som skulle skrivas ut* och testa sedan mot
+  riktiga order och dokument på kontoret innan schemaläggning aktiveras.
+- Besluta separat om en **ändrad** PDF (`reprint`) ska skrivas ut automatiskt
+  eller kräva manuell granskning. Regeln "redan utskriven = hoppa över" gäller
+  endast samma dokumentgeneration.
 
 ## Övriga åkerier och export
 

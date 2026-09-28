@@ -1,5 +1,5 @@
 import { createVirtualPrinter } from './printward-virtual-printer.js';
-import { sortLookupItems } from './printward-lookup-sort.js';
+import { groupDispatchItems, matchesDispatchSearch, sortLookupItems } from './printward-lookup-sort.js';
 
 const dialog = document.querySelector('#detailsDialog');
 const title = document.querySelector('#dialogTitle');
@@ -22,7 +22,7 @@ const virtualPrinter = createVirtualPrinter(simulationStorage);
 let simulationEnabled = false;
 let proposedSimulation = null;
 let lookupSort = 'priority';
-const statuses = { alla: 'all', plock: 'blocked', uppdaterade: 'reprint', saknade: 'missing' };
+const statuses = { search: 'all', alla: 'all', plock: 'blocked', uppdaterade: 'reprint', saknade: 'missing' };
 const stockholmDateFormatter = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit', day: '2-digit'
 });
@@ -33,6 +33,8 @@ function followingDate(value) {
   return date.toISOString().slice(0, 10);
 }
 let activeView = 'printward';
+let suppressDialogCloseNavigation = false;
+let ordersRequest = 0;
 let activeFreightPanel = null;
 let freightPayload = null;
 let freightRequest = 0;
@@ -53,6 +55,7 @@ let dispatchRequest = 0;
 let activeDispatchSlot = null;
 const selectedDispatchOrders = new Set();
 let dispatchReviewOpen = false;
+const dispatchGroupOpenOverrides = new Map();
 let chainPayload = null;
 let chainRequest = 0;
 let activeChainPanel = null;
@@ -211,6 +214,59 @@ function documentPreviewLink(document) {
 }
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.remove('show'), 2400); }
 function setActive(view) { activeView = view; document.querySelectorAll('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === view)); grid.hidden = view !== 'printward'; ordersView.hidden = view === 'printward'; document.querySelector('#lookupActions').hidden = view === 'printward'; }
+function lookupSnapshot(view = activeView) {
+  return {
+    view,
+    deliveryDate: deliveryDate.value,
+    query: search.value,
+    dispatchSlot: activeDispatchSlot,
+    freightPanel: activeFreightPanel,
+    chainPanel: activeChainPanel
+  };
+}
+function syncLookupHistory() {
+  if (!history.state?.printwardLookup || activeView === 'printward') return;
+  history.replaceState({ ...history.state, printwardLookup: lookupSnapshot() }, '');
+}
+function navigateToLookup(view) {
+  if (view === 'printward') return closeLookup();
+  const alreadyInLookup = Boolean(history.state?.printwardLookup) && activeView !== 'printward';
+  setActive(view);
+  const state = { ...(history.state || {}), printwardLookup: lookupSnapshot() };
+  if (alreadyInLookup) history.replaceState(state, '');
+  else history.pushState(state, '');
+}
+function closeLookup() {
+  if (activeView === 'printward') return;
+  if (history.state?.printwardLookup) history.back();
+  else setActive('printward');
+}
+function restoreLookup(snapshot) {
+  if (dialog.open) {
+    suppressDialogCloseNavigation = true;
+    dialog.close();
+  }
+  const views = new Set([...Object.keys(statuses), 'dispatch', 'freight', 'chains', 'returns', 'pickups', 'staff']);
+  if (!snapshot || !views.has(snapshot.view)) return setActive('printward');
+  const dateChanged = snapshot.deliveryDate && snapshot.deliveryDate !== deliveryDate.value;
+  if (snapshot.deliveryDate) deliveryDate.value = snapshot.deliveryDate;
+  search.value = snapshot.query || '';
+  activeDispatchSlot = snapshot.dispatchSlot || null;
+  activeFreightPanel = snapshot.freightPanel || null;
+  activeChainPanel = snapshot.chainPanel || null;
+  setActive(snapshot.view);
+  if (dateChanged) {
+    loadFreightDashboard(); loadDispatchDashboard(); loadChainDashboard();
+    loadReturnDashboard(); loadPickupDashboard();
+  }
+  if (statuses[activeView]) loadOrders(activeView);
+  else if (activeView === 'dispatch') renderDispatchList();
+  else if (activeView === 'freight') renderFreightList();
+  else if (activeView === 'chains') renderChainList();
+  else if (activeView === 'returns' && returnPayload) renderReturnList(returnPayload);
+  else if ((activeView === 'pickups' || activeView === 'staff') && pickupPayload) renderPickupList(pickupPayload, activeView === 'staff');
+  else ordersView.innerHTML = '<div class="orders-empty">Hämtar order…</div>';
+}
 function updateUpdatedBadge(count) { const badge = document.querySelector('[data-view="uppdaterade"] i'); badge.textContent = count ?? ''; badge.hidden = !count; }
 
 const freightNames = {
@@ -439,17 +495,13 @@ function renderDispatchList() {
     ordersView.innerHTML = '<div class="orders-empty">Hämtar följesedlar…</div>';
     return;
   }
-  const query = search.value.trim().toLowerCase();
-  const visibleItems = sortLookupItems(slot.orders.filter(({ order }) => {
-    if (!query) return true;
-    const context = order.context || {};
-    return [order.orderNumber, context.customerNo, context.customerName, context.deliveryName,
-      context.deliveryMethodName, context.dispatchTime].filter(Boolean).join(' ').toLowerCase().includes(query);
-  }), lookupSort);
+  const query = search.value.trim();
+  const visibleItems = sortLookupItems(slot.orders.filter((item) => matchesDispatchSearch(item, query)), lookupSort);
+  const groups = groupDispatchItems(visibleItems);
   const readyVisible = visibleItems.filter(({ order, ready }) => ready && packetCandidates(order).length);
   const selectedItems = slot.orders.filter(({ order, ready }) => ready && packetCandidates(order).length
     && selectedDispatchOrders.has(String(order.orderNumber)));
-  const rows = visibleItems.map(({ order, ready, matchSource }) => {
+  const orderRow = ({ order, ready, matchSource }) => {
     const context = order.context || {};
     const missing = [!order.documents?.packingSlip && 'Följesedel', !order.documents?.attachment && 'Partibilaga'].filter(Boolean);
     const packingBlocked = order.packingBlocked || context.packingBlocked;
@@ -457,6 +509,12 @@ function renderDispatchList() {
     const selectable = ready && packetCandidates(order).length > 0;
     const state = virtualStatus || (ready ? 'Klar för utskrift' : packingBlocked ? 'Pågående plock' : `Saknar ${missing.join(' och ') || 'dokument'}`);
     return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Ordern är inte klar eller redan simulerad"'} ${selectable && selectedDispatchOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td>${escapeHtml(context.deliveryMethodName || context.deliveryMethod || '–')}${matchSource === 'registration-text' ? '<small class="freight-type">Regnr identifierat via text</small>' : ''}</td><td><span class="order-status ${virtualStatus ? 'simulated' : ready ? 'ready' : packingBlocked ? '' : 'missing'}">${escapeHtml(state)}</span></td></tr>`;
+  };
+  const bundles = groups.map((group, index) => {
+    const expanded = dispatchGroupOpenOverrides.has(group.key)
+      ? dispatchGroupOpenOverrides.get(group.key) : Boolean(query);
+    const groupId = `dispatch-group-${index}`;
+    return `<section class="dispatch-group" aria-label="${escapeHtml(group.label)}"><button class="dispatch-group-toggle" type="button" data-dispatch-group="${escapeHtml(group.key)}" aria-expanded="${expanded}" aria-controls="${groupId}"><span><strong>${escapeHtml(group.label)}</strong><small>${group.items.length} order i bunten</small></span><span class="dispatch-group-count"><b>${group.ready} / ${group.items.length}</b> klara</span><span class="dispatch-group-chevron" aria-hidden="true">⌄</span></button><div class="dispatch-group-body" id="${groupId}" ${expanded ? '' : 'hidden'}><table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Leveransprioritet</th><th>Körsätt</th><th>Följesedlar</th></tr></thead><tbody>${group.items.map(orderRow).join('')}</tbody></table></div></section>`;
   }).join('');
   const reviewRows = selectedItems.map(({ order, matchSource }) => {
     const context = order.context || {};
@@ -465,7 +523,13 @@ function renderDispatchList() {
   const review = dispatchReviewOpen && selectedItems.length
     ? `<section class="dispatch-review" aria-label="Granskning av vald bunt"><h2>Vald bunt · ${selectedItems.length} order</h2><p>Sorterad efter orderns DelPri och körsätt. Varje order består av följesedel + partibilaga. Detta är endast en granskning; ingen utskrift startas.</p><ol>${reviewRows}</ol></section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order har följesedel och partibilaga och är färdigplockade. Utskriftsbunten behåller ordningen efter orderns DelPri och körsätt; sorteringsvalet ändrar bara listan. Ingen riktig utskrift från denna vy.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i listan</label><span>${selectedItems.length} valda av ${slot.ready} klara</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${simulationEnabled && selectedItems.length ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${rows ? `<table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Leveransprioritet</th><th>Körsätt</th><th>Följesedlar</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order har följesedel och partibilaga och är färdigplockade. Klicka på ett körsätt för att granska alla order i den bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen. Ingen riktig utskrift från denna vy.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${simulationEnabled && selectedItems.length ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
+  ordersView.querySelectorAll('[data-dispatch-group]').forEach((button) => button.addEventListener('click', () => {
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    dispatchGroupOpenOverrides.set(button.dataset.dispatchGroup, expanded);
+    button.setAttribute('aria-expanded', String(expanded));
+    button.nextElementSibling.hidden = !expanded;
+  }));
   ordersView.querySelector('.print-selected').addEventListener('click', () => {
     openVirtualPrint(`${dispatchNames[activeDispatchSlot]} · valda följesedlar`,
       selectedItems.flatMap(({ order }) => packetCandidates(order)),
@@ -504,6 +568,7 @@ async function loadDispatchDashboard(refresh = false) {
   dispatchPayload = null;
   selectedDispatchOrders.clear();
   dispatchReviewOpen = false;
+  dispatchGroupOpenOverrides.clear();
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
   if (refresh) params.set('refresh', '1');
   document.querySelectorAll('[data-dispatch-slot]').forEach((card) => {
@@ -694,7 +759,7 @@ function openOrderDetails(order) {
   ].join('') || (context.freightConsignmentNumbers?.length ? `<dt>Bokningsnummer</dt><dd>${escapeHtml(context.freightConsignmentNumbers.join(', '))}</dd>` : '');
   const documentRows = documents.length ? documents.map((document) => `<li><span>${escapeHtml(documentNames[document.type] || document.typeLabel || document.type || 'Dokument')} · ${documentPreviewLink(document)}</span><span class="document-status ${simulated(order.orderNumber, document.type) ? 'simulated' : escapeHtml(document.printStatus || '')}">${escapeHtml(simulated(order.orderNumber, document.type) ? 'Simulerat utskriven' : statusLabel(document.printStatus))}</span></li>`).join('') : '<li><span>Inga dokument hittades</span></li>';
   title.textContent = `Order ${order.orderNumber}`;
-  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || 'Okänd kund')}</dd><dt>Leverans</dt><dd>${escapeHtml(context.deliveryDate || '–')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Körsätt</dt><dd>${escapeHtml(context.deliveryMethodName || '–')}</dd><dt>Orderstatus</dt><dd>${escapeHtml(statusLabel(order.packetStatus))}</dd>${bookingRows}</dl><div><strong>Dokument</strong><ul class="order-documents">${documentRows}</ul></div><button class="quick-print" type="button" ${simulationEnabled && simulationSelection.items.length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
+  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || 'Okänd kund')}</dd><dt>Ort</dt><dd>${escapeHtml(context.deliveryPostalArea || '–')}</dd><dt>Leverans</dt><dd>${escapeHtml(context.deliveryDate || '–')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Körsätt</dt><dd>${escapeHtml(context.deliveryMethodName || '–')}${context.deliveryMethod ? ` · rutt ${escapeHtml(context.deliveryMethod)}` : ''}</dd><dt>Orderstatus</dt><dd>${escapeHtml(statusLabel(order.packetStatus))}</dd>${bookingRows}</dl><div><strong>Dokument</strong><ul class="order-documents">${documentRows}</ul></div><button class="quick-print" type="button" ${simulationEnabled && simulationSelection.items.length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
   detail.querySelector('.quick-print').addEventListener('click', () => {
     dialog.close();
     if (simulationSelection.panelId) openVerifiedFreightSimulation(simulationSelection.label, simulationSelection.items, simulationSelection.panelId);
@@ -704,19 +769,24 @@ function openOrderDetails(order) {
 }
 
 function renderOrders(payload, view) {
-  const names = { alla: 'Alla order', plock: 'Pågående plock', uppdaterade: 'Uppdaterade', saknade: 'Saknade' };
+  const names = { search: 'Sökresultat', alla: 'Alla order', plock: 'Pågående plock', uppdaterade: 'Uppdaterade', saknade: 'Saknade' };
   const orders = payload.orders || [];
   total.textContent = payload.summary?.totalOrders ?? 0;
   packing.textContent = payload.summary?.blockedOrders ?? 0;
   updateUpdatedBadge(payload.summary?.reprintOrders ?? 0);
-  const rows = orders.map((order) => { const c = order.context || {}; return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(c.customerName || '–')}</td><td>${escapeHtml(c.dispatchTime || '–')}</td><td><span class="order-status ${escapeHtml(order.packetStatus)}">${escapeHtml(statusLabel(order.packetStatus))}</span></td></tr>`; }).join('');
-  ordersView.innerHTML = `<header><div><h1>${names[view]}</h1><p>${orders.length} order för valt leveransdatum. Klicka på en rad för detaljer.</p></div><span class="read-only">Endast läsning</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Avgång</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order hittades för valt datum och filter.</div>'}`;
+  const query = search.value.trim();
+  const description = view === 'search'
+    ? `${orders.length} order matchar ${query ? `”${escapeHtml(query)}”` : 'sökningen'} för ${escapeHtml(deliveryDate.value)}. Klicka på en rad för dokument och status.`
+    : `${orders.length} order för valt leveransdatum. Klicka på en rad för detaljer.`;
+  const rows = orders.map((order) => { const c = order.context || {}; return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(c.customerName || c.deliveryName || '–')}</td><td>${escapeHtml(c.deliveryPostalArea || '–')}</td><td>${escapeHtml(c.deliveryMethodName || c.deliveryMethod || '–')}${c.deliveryMethod ? `<small class="route-code">Rutt ${escapeHtml(c.deliveryMethod)}</small>` : ''}</td><td>${escapeHtml(c.dispatchTime || '–')}</td><td><span class="order-status ${escapeHtml(order.packetStatus)}">${escapeHtml(statusLabel(order.packetStatus))}</span></td></tr>`; }).join('');
+  ordersView.innerHTML = `<header><div><h1>${names[view]}</h1><p>${description}</p></div><span class="read-only">Endast läsning</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Ort</th><th>Körsätt / regnr</th><th>Avgång</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order hittades för valt datum och filter.</div>'}`;
   ordersView.querySelectorAll('[data-order]').forEach((row) => row.addEventListener('click', () => openOrderDetails(orders.find((item) => String(item.orderNumber) === row.dataset.order))));
 }
 
 async function loadOrders(view, refresh = false) {
+  const request = ++ordersRequest;
   const params = new URLSearchParams({ status: statuses[view], deliveryDate: deliveryDate.value, q: search.value.trim() }); if (refresh) params.set('refresh', '1'); ordersView.innerHTML = '<div class="orders-empty">Hämtar order…</div>';
-  try { const response = await fetch(`/api/orders?${params}`); if (!response.ok) throw new Error('Kunde inte hämta order.'); renderOrders(await response.json(), view); } catch (error) { ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`; }
+  try { const response = await fetch(`/api/orders?${params}`); if (!response.ok) throw new Error('Kunde inte hämta order.'); const payload = await response.json(); if (request === ordersRequest && activeView === view) renderOrders(payload, view); } catch (error) { if (request === ordersRequest && activeView === view) ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`; }
 }
 
 const returnDepartureLabels = { early: 'Tidig', morning: 'Förmiddag', afternoon: 'Eftermiddag', unscheduled: 'Utan avgångstid' };
@@ -851,7 +921,7 @@ function renderPickupCard(payload) {
     if (context) openPickupDetails(context);
   }));
   list.querySelector('#staffOrders')?.addEventListener('click', () => {
-    setActive('staff');
+    navigateToLookup('staff');
     renderPickupList(payload, true);
   });
   list.querySelectorAll('[data-sim-pickup]').forEach((button) => button.addEventListener('click', () => {
@@ -941,51 +1011,56 @@ document.querySelector('#simulationConfirm').addEventListener('click', () => {
   showToast(`${new Set(job.items.map((item) => item.orderNumber)).size} order simulerade · inga riktiga utskrifter.`);
 });
 simulationDialog.addEventListener('close', () => { proposedSimulation = null; });
-document.querySelector('#backToDashboard').addEventListener('click', () => setActive('printward'));
+document.querySelector('#backToDashboard').addEventListener('click', closeLookup);
 dashboardSort.addEventListener('change', (event) => {
   lookupSort = event.currentTarget.value;
   if (activeView === 'freight') renderFreightList();
   else if (activeView === 'dispatch') renderDispatchList();
   else if (activeView === 'chains') renderChainList();
 });
-dialog.addEventListener('close', () => setActive('printward'));
+dialog.addEventListener('close', () => {
+  if (suppressDialogCloseNavigation) suppressDialogCloseNavigation = false;
+  else closeLookup();
+});
+window.addEventListener('popstate', (event) => restoreLookup(event.state?.printwardLookup));
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !dialog.open && activeView !== 'printward') {
     event.preventDefault();
-    setActive('printward');
+    closeLookup();
   }
 });
 document.querySelectorAll('[data-dispatch-slot]').forEach((button) => button.addEventListener('click', () => {
   selectedDispatchOrders.clear();
   dispatchReviewOpen = false;
+  dispatchGroupOpenOverrides.clear();
   activeDispatchSlot = button.dataset.dispatchSlot;
-  setActive('dispatch');
+  navigateToLookup('dispatch');
   renderDispatchList();
 }));
 document.querySelectorAll('[data-chain-panel]').forEach((button) => button.addEventListener('click', () => {
   selectedChainOrders.clear();
   chainReviewOpen = false;
   activeChainPanel = button.dataset.chainPanel;
-  setActive('chains');
+  navigateToLookup('chains');
   renderChainList();
 }));
 document.querySelectorAll('[data-freight-panel]').forEach((button) => button.addEventListener('click', () => {
   selectedFreightOrders.clear();
   clearFreightReview();
   activeFreightPanel = button.dataset.freightPanel;
-  setActive('freight');
+  navigateToLookup('freight');
   renderFreightList();
 }));
-document.querySelectorAll('.nav-tab').forEach((button) => button.addEventListener('click', () => { const view = button.dataset.view; setActive(view); if (view !== 'printward') loadOrders(view); }));
+document.querySelectorAll('.nav-tab').forEach((button) => button.addEventListener('click', () => { const view = button.dataset.view; if (view === 'printward') closeLookup(); else { navigateToLookup(view); loadOrders(view); } }));
 document.querySelector('[data-returns]').addEventListener('click', () => {
   selectedReturnOrders.clear();
   returnReviewOpen = false;
-  setActive('returns');
+  navigateToLookup('returns');
   if (returnPayload) renderReturnList(returnPayload);
   else loadReturnDashboard();
 });
 document.querySelector('.pickup-more').addEventListener('click', () => {
-  setActive('pickups');
+  navigateToLookup('pickups');
   if (pickupPayload) renderPickupList(pickupPayload);
   else loadPickupDashboard();
 });
@@ -1007,6 +1082,7 @@ search.addEventListener('keydown', (event) => {
   else if (activeView === 'dispatch') {
     selectedDispatchOrders.clear();
     dispatchReviewOpen = false;
+    dispatchGroupOpenOverrides.clear();
     renderDispatchList();
   }
   else if (activeView === 'chains') {
@@ -1021,11 +1097,13 @@ search.addEventListener('keydown', (event) => {
   }
   else if ((activeView === 'pickups' || activeView === 'staff') && pickupPayload) renderPickupList(pickupPayload, activeView === 'staff');
   else {
-    if (activeView === 'printward') setActive('alla');
+    if (activeView === 'printward') navigateToLookup('search');
     if (statuses[activeView]) loadOrders(activeView);
   }
+  syncLookupHistory();
 });
 function dateChanged() {
+  syncLookupHistory();
   loadFreightDashboard();
   loadDispatchDashboard();
   loadChainDashboard();
@@ -1037,6 +1115,7 @@ deliveryDate.addEventListener('change', dateChanged);
 document.querySelector('.active-date').addEventListener('click', () => { deliveryDate.value = todayInStockholm(); dateChanged(); });
 document.querySelector('.active-date + .control-button').addEventListener('click', () => { deliveryDate.value = followingDate(deliveryDate.value); dateChanged(); });
 deliveryDate.value = todayInStockholm();
+if (history.state?.printwardLookup) restoreLookup(history.state.printwardLookup);
 updateSimulationStatus();
 loadFreightDashboard();
 loadDispatchDashboard();

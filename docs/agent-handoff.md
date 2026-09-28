@@ -490,3 +490,76 @@ are verification needs, not claims that the running system is broken.
   repository, a production configuration snapshot/preservation plan, and
   separate rollout/health/print-path validation. None of that is configured
   by the demo work.
+
+## 2026-09-28 follow-slip method bundles (local work)
+
+- Tidig/FM/EM lookups group their displayed orders by the **order's** `DelMt`,
+  with `deliveryMethodName` as the visible route/registration label. Each
+  clickable bundle shows ready/total counts and expands to all of its order
+  rows, including individual document status and selection. The existing
+  selected-bundle review and virtual simulation still use the server's
+  original `DelPri` ordering; grouping and the top sort are view-only.
+- The top search in these lookups now matches the numeric delivery-method code
+  as well as its name, order and customer details. A nonempty search expands
+  matching bundles by default. Changing the date, refreshing, switching
+  departures, or submitting a new search still clears selected orders.
+- Local Node 22.18.0 `node --test` passed 81/81 (the temporary bundled `npm`
+  executable was incomplete). Browser QA against a separate read-only mock
+  server on port 3102 verified Tidig on 2026-06-24: route 11 / City van 11
+  expanded to order 1003; a search for `City van` found and opened the bundle,
+  and an unmatched route search showed an empty result. No nShift call,
+  physical print, GitHub push, or Cloud Run deployment was made for this change.
+
+## 2026-09-28 overview search (local work)
+
+- The overview search now opens a dedicated **Sökresultat** lookup on Enter,
+  querying `/api/orders` with `status=all`, the selected delivery date, and
+  the search term. Search results show order, customer, delivery town,
+  delivery method/registration text and route number, departure and print
+  status; clicking a row opens the existing document/status detail dialog.
+- SQL context now reads the order-level `Ord.DelPArea` and `Ord.DelPNo` fields,
+  normalizes them as `deliveryPostalArea` and `deliveryPostalCode`, and includes
+  them in `filterOrders`. Existing customer/name, delivery-method, booking and
+  order-number matches remain supported. This is a read-only addition with no
+  change to eligibility or print-job creation.
+- Scope: `Alla order` for the selected date, including different status values
+  and carriers. Pickups and returns have separate data sources and are not yet
+  included in this general search. The three own-car follow-slip departure
+  lookups already share the route-bundle behavior from the preceding change.
+
+## 2026-09-28 Eriksson route 49 (local work)
+
+- The owner clarified that order `DelMt=49` (`K&F Danmark 13:00`) belongs in
+  the Eriksson freight panel alongside `DelMt=25`. Classification requires the
+  Kyl & Frys supplier `7331697` and runs before the generic Kyl group.
+  Rutt 49 shares the existing Kyl/Eriksson freight-document eligibility and
+  `DelPri` sorting; no nShift template or label text was changed.
+- Regression tests cover classification, combined Eriksson counts, ordering,
+  and read-only freight selection for route 49. Verify with real Visma/nShift
+  documents before any physical print activation. Not deployed.
+
+## First follow-up after manual printing: cutoff-triggered freight jobs
+
+- Owner priority: once new Printward's manual freight output has been verified,
+  investigate scheduled printing at route-specific order cutoffs. Already
+  printed *document generations* must be skipped; queued/created jobs are not
+  proof of printing, and concurrent manual/automatic requests need an atomic
+  reservation or equivalent idempotency mechanism. The current print status
+  index is generation-aware, but `createJob` does not yet reserve or deduplicate
+  pending documents, so current APIs are **not safe** as an automatic scheduler.
+- Begin with a read-only planned-run/dry-run and verify actual route cutoffs,
+  same-day exceptions, print agent/printer availability, failure/retry behavior,
+  and whether `reprint` versions may run automatically. SQL Server Agent vs a
+  separate scheduled Printward worker is undecided. Do not implement a direct
+  SQL-to-printer/nShift path. No schedule or live job was created in this step.
+
+## 2026-09-28 lookup browser history (local work)
+
+- Opening a dashboard lookup now pushes one browser-history state. Browser Back,
+  the lookup close button, and Esc return to the overview; Forward restores the
+  lookup, date, and search term. Moving between lookups and changing filters
+  replaces that state instead of stacking entries. This is entirely client-side
+  navigation and does not enable real printing.
+- Chrome QA against the local read-only mock on port 3103 verified Back and
+  Forward on a Tidig lookup, plus close-button and Esc navigation. No deploy
+  or physical print was performed.

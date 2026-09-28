@@ -50,8 +50,15 @@ The date picker uses the Europe/Stockholm calendar date. Date-scoped SQL reads
 page through all matching order numbers in batches (including returns and
 pickups), rather than silently stopping after the first 500.
 The Eriksson panel is the Kyl & Frys supplier `7331697` with **order**
-`DelMt=25`; it uses the same document type and sorts by the order's `DelPri`.
+`DelMt=25` (Eriksson) or `DelMt=49` (K&F Danmark 13:00); it uses the same
+document type and sorts by the order's `DelPri`.
 This classification does not alter nShift-generated PDFs or labels.
+After the new manual freight printing has been verified, the first follow-up
+priority is automatic freight printing at each route's order cutoff. This is
+only a documented requirement: no SQL Agent job, scheduler, or automatic print
+path is enabled. The future worker must skip already printed document
+generations, prevent races with manual jobs, and mark a document printed only
+after the agent confirms it. See `docs/dashboard-routing-rules.md`.
 Fictional local orders `900002` and `900003` on `2026-06-24` demonstrate
 Eriksson sorting (07:00 before 16:00).
 Fictional orders `900004` and `900005` on the same date exercise DSV Finland
@@ -93,6 +100,25 @@ lookups with **Leveransprioritet** (the default) or **Körsätt**. Körsätt gro
 order's Visma `DelMt` number and keeps `DelPri` order within each method.
 This changes only the visible list; the server-validated freight review and
 the existing planned print/simulation order remain unchanged.
+In each Tidig/FM/EM lookup, orders are now displayed in collapsible bundles by
+the order's `DelMt` (not the customer's default delivery method). A bundle shows
+ready/total counts; opening it shows every matching order and its document
+status. The top search accepts the delivery-method number or name as well as
+order/customer details. A search expands matching bundles automatically. This
+grouped display does not change readiness, selection rules, or print order.
+From the Printward overview, entering a search and pressing Enter opens a
+date-scoped, read-only **Sökresultat** lookup across all statuses in **Alla
+order**. It matches order/customer names, order numbers, booking numbers, route
+codes and route/registration text. The order's Visma delivery town
+(`Ord.DelPArea`) and post code (`Ord.DelPNo`) are included in search and shown
+in the results alongside the delivery method, departure, and status. The town
+is taken from the order, not the customer card. Separate pickup and return
+endpoints are not part of this general order search yet. Search never starts a
+print job.
+Opening any dashboard lookup adds one browser-history step. The browser Back
+button, the lookup's close button, and Esc return to the Printward overview;
+Forward reopens the lookup. Switching between lookups or changing its filters
+updates that same history step rather than accumulating extra steps.
 Each overview card now separates its lookup action from a quick-print action.
 The quick-print buttons and **Skriv ut valda** controls are disabled by default
 in read-only mode; they do not submit jobs. The optional **Starta virtuell

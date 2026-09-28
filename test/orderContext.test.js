@@ -24,6 +24,13 @@ test('converts Visma delivery priority to departure time', () => {
   assert.equal(dispatchPriorityToTime(0), null);
 });
 
+test('mock order context keeps the order delivery town and post code', async () => {
+  const client = new MockOrderContextClient(new URL('../data/mock-order-context.json', import.meta.url));
+  const context = (await client.getByOrderNumbers(['1001'])).get('1001');
+  assert.equal(context.deliveryPostalArea, 'Stockholm');
+  assert.equal(context.deliveryPostalCode, '111 22');
+});
+
 test('attaches missing order context safely', () => {
   const orders = attachOrderContexts([{ orderNumber: '123' }], new Map());
   assert.equal(orders[0].context.available, false);
@@ -38,6 +45,8 @@ test('attaches missing order context safely', () => {
   assert.equal(orders[0].context.freightPalletCopies, 0);
   assert.equal(orders[0].context.palletDocumentRequired, false);
   assert.equal(orders[0].context.deliveryMethodName, '');
+  assert.equal(orders[0].context.deliveryPostalArea, '');
+  assert.equal(orders[0].context.deliveryPostalCode, '');
   assert.equal(orders[0].context.dispatchTime, null);
   assert.equal(orders[0].context.packerNo, 0);
   assert.equal(orders[0].context.packerName, '');
@@ -84,6 +93,8 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /ISNULL\(customer\.R12, 0\) AS CustomerChainNo/);
   assert.match(queries[1], /SELECT TOP 1 a\.Nm, a\.CPmtTrm, a\.R12\s+FROM Actor a\s+WHERE a\.CustNo = o\.CustNo/);
   assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) AS SupNo/);
+  assert.match(queries[1], /ISNULL\(o\.DelPArea, ''\) AS DelPArea/);
+  assert.match(queries[1], /ISNULL\(o\.DelPNo, ''\) AS DelPNo/);
   assert.match(queries[1], /o\.Gr2,/);
   assert.match(queries[1], /o\.Gr3,/);
   assert.match(queries[1], /WHERE a\.SupNo = o\.SupNo/);

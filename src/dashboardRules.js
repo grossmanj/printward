@@ -1,5 +1,5 @@
 const ROUTES = {
-  eriksson: 25,
+  eriksson: new Set([25, 49]),
   dsvFinland: new Set([47, 48]),
   jansenGermany: 52
 };
@@ -16,7 +16,7 @@ export function freightPanelForOrder(order = {}) {
   const distributorNo = Number(context.distributorNo || 0);
 
   // Eriksson uses Kyl & Frys' supplier; only the order's DelMt separates it.
-  if (deliveryMethod === ROUTES.eriksson && distributorNo === SUPPLIERS.kylAndFrys) return 'eriksson';
+  if (ROUTES.eriksson.has(deliveryMethod) && distributorNo === SUPPLIERS.kylAndFrys) return 'eriksson';
   if (ROUTES.dsvFinland.has(deliveryMethod) || distributorNo === SUPPLIERS.dsvFinland) return 'dsv-finland';
   if (deliveryMethod === ROUTES.jansenGermany) return 'other-carriers';
   if (distributorNo === SUPPLIERS.kylAndFrys) return 'kyl-and-frys';

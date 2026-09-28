@@ -37,3 +37,31 @@ test('dispatch, freight and chain lookups expose view-only delivery-method sorti
   assert.match(script, /activeView === 'chains'\) renderChainList\(\)/);
   assert.doesNotMatch(script, /\/api\/print-jobs/);
 });
+
+test('follow-slip lookup has clickable method bundles and searchable route codes', () => {
+  assert.match(html, /aria-label="Sök ort, kund, registreringsnummer, rutt, order eller bokningsnummer"/);
+  assert.match(script, /groupDispatchItems\(visibleItems\)/);
+  assert.match(script, /matchesDispatchSearch\(item, query\)/);
+  assert.match(script, /data-dispatch-group=/);
+  assert.match(script, /aria-expanded=/);
+  assert.match(script, /button\.nextElementSibling\.hidden = !expanded/);
+  assert.doesNotMatch(script, /\/api\/print-jobs/);
+});
+
+test('overview search opens an all-status, date-scoped lookup with city and route columns', () => {
+  assert.match(script, /search: 'all'/);
+  assert.match(script, /if \(activeView === 'printward'\) navigateToLookup\('search'\)/);
+  assert.match(script, /deliveryDate: deliveryDate\.value, q: search\.value\.trim\(\)/);
+  assert.match(script, /<h1>\$\{names\[view\]\}<\/h1>/);
+  assert.match(script, /<th>Ort<\/th><th>Körsätt \/ regnr<\/th>/);
+});
+
+test('browser Back and Forward navigate between overview and lookups without print actions', () => {
+  assert.match(script, /history\.pushState\(state, ''\)/);
+  assert.match(script, /history\.replaceState\(state, ''\)/);
+  assert.match(script, /history\.back\(\)/);
+  assert.match(script, /window\.addEventListener\('popstate', \(event\) => restoreLookup\(event\.state\?\.printwardLookup\)\)/);
+  assert.match(script, /#backToDashboard'\)\.addEventListener\('click', closeLookup\)/);
+  assert.match(script, /event\.key === 'Escape'[\s\S]*closeLookup\(\)/);
+  assert.doesNotMatch(script, /\/api\/print-jobs/);
+});

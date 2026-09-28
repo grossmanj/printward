@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planFreightDocumentSelection, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
 
-test('places route 25 in Eriksson before the Kyl & Frys supplier rule', () => {
+test('places routes 25 and 49 in Eriksson before the Kyl & Frys supplier rule', () => {
   assert.equal(freightPanelForOrder({ context: { deliveryMethod: 25, routeGroup: 4, distributorNo: 7331697 } }), 'eriksson');
+  assert.equal(freightPanelForOrder({ context: { deliveryMethod: 49, deliveryMethodName: 'K&F Danmark 13:00', distributorNo: 7331697 } }), 'eriksson');
   assert.equal(freightPanelForOrder({ context: { routeGroup: 25, deliveryMethod: 20, distributorNo: 7331697 } }), 'kyl-and-frys');
   assert.equal(freightPanelForOrder({ context: { deliveryMethod: 25, distributorNo: 90000000 } }), 'other-carriers');
+  assert.equal(freightPanelForOrder({ context: { deliveryMethod: 49, distributorNo: 90000000 } }), 'other-carriers');
 });
 
 test('places DSV Finland by route or supplier number', () => {
@@ -26,9 +28,10 @@ test('keeps Kyl & Frys, Best Transport and non-freight orders distinct', () => {
   assert.equal(freightPanelForOrder({ context: {} }), null);
 });
 
-test('freight readiness ignores missing packing slips and gives route 25 its own count', () => {
+test('freight readiness ignores missing packing slips and combines routes 25 and 49 in Eriksson', () => {
   const panels = summarizeFreightPanels([
     { orderNumber: '101', context: { deliveryMethod: 25, distributorNo: 7331697, dispatchPriority: 16 }, documents: { pallet: { printStatus: 'pending' } }, requiredTypes: ['pallet', 'packingSlip'], missingTypes: ['packingSlip'] },
+    { orderNumber: '108', context: { deliveryMethod: 49, distributorNo: 7331697, dispatchPriority: 13 }, documents: { pallet: { printStatus: 'pending' } }, requiredTypes: ['pallet'], missingTypes: [] },
     { orderNumber: '102', context: { distributorNo: 7331697, palletDocumentRequired: true, dispatchPriority: 7 }, documents: { freight: { printStatus: 'pending' } } },
     { orderNumber: '103', context: { distributorNo: 50063993, dispatchPriority: 11 }, documents: { freight: { printStatus: 'printed' } } },
     { orderNumber: '104', context: { distributorNo: 55058127, deliveryMethod: 26, dispatchPriority: 11 }, documents: {} },
@@ -36,7 +39,8 @@ test('freight readiness ignores missing packing slips and gives route 25 its own
     { orderNumber: '105', context: { deliveryMethod: 52 }, documents: {} },
     { orderNumber: '106', context: {}, documents: {} }
   ]);
-  assert.deepEqual([panels.eriksson.total, panels.eriksson.ready, panels.eriksson.waiting], [1, 1, 0]);
+  assert.deepEqual([panels.eriksson.total, panels.eriksson.ready, panels.eriksson.waiting], [2, 2, 0]);
+  assert.deepEqual(panels.eriksson.orders.map(({ order }) => order.orderNumber), ['108', '101']);
   assert.deepEqual([panels['kyl-and-frys'].total, panels['kyl-and-frys'].ready, panels['kyl-and-frys'].waiting], [1, 0, 1]);
   assert.deepEqual([panels['dsv-finland'].total, panels['dsv-finland'].ready, panels['dsv-finland'].waiting], [1, 1, 0]);
   assert.equal(panels['dsv-finland'].orders[0].printStatus, 'printed');
@@ -79,12 +83,13 @@ test('chilled and frozen booking numbers remain distinct rows for one freight or
 test('freight plan is read-only, sorted, and excludes packing slips and attachments', () => {
   const orders = [
     { orderNumber: '200', context: { distributorNo: 7331697, deliveryMethod: 25, dispatchPriority: 16 }, documents: { pallet: { fileName: 'pallet200.pdf', printStatus: 'pending' }, packingSlip: { fileName: 'pack200.pdf' } } },
+    { orderNumber: '150', context: { distributorNo: 7331697, deliveryMethod: 49, dispatchPriority: 13 }, documents: { pallet: { fileName: 'pallet150.pdf', printStatus: 'pending' } } },
     { orderNumber: '100', context: { distributorNo: 7331697, deliveryMethod: 25, dispatchPriority: 7, freightConsignmentFresh: 'FRESH-100' }, documents: { pallet: { fileName: 'pallet100.pdf', printStatus: 'printed' }, attachment: { fileName: 'parti100.pdf' } } }
   ];
-  const plan = planFreightDocumentSelection(orders, 'eriksson', ['200', '100']);
+  const plan = planFreightDocumentSelection(orders, 'eriksson', ['200', '150', '100']);
   assert.equal(plan.valid, true);
-  assert.deepEqual(plan.orders.map((order) => order.orderNumber), ['100', '200']);
-  assert.deepEqual(plan.orders.map((order) => order.document.fileName), ['pallet100.pdf', 'pallet200.pdf']);
+  assert.deepEqual(plan.orders.map((order) => order.orderNumber), ['100', '150', '200']);
+  assert.deepEqual(plan.orders.map((order) => order.document.fileName), ['pallet100.pdf', 'pallet150.pdf', 'pallet200.pdf']);
   assert.deepEqual(plan.excludes, ['packingSlip', 'attachment']);
   assert.deepEqual(plan.orders[0].bookings, [{ kind: 'Kylt', number: 'FRESH-100' }]);
 });
