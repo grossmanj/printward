@@ -150,7 +150,12 @@ printer validation was performed for this documentation update.
   in `europe-west1`. Set both `JOB` and `SCHEDULER_JOB` when targeting production.
 - Windows installation downloads GitHub `main`, Node 20, and SumatraPDF 3.6.1 into
   `%LOCALAPPDATA%\PrintwardAgent`; logs are in `agent.log`. Rerun the installer to
-  update an installed agent. Pushing or deploying the web app does not update PCs.
+  update an installed agent. Its ASCII `.cmd` and `.vbs` launchers must resolve
+  `%LOCALAPPDATA%` at runtime, not interpolate an absolute profile path: a Windows
+  account such as `Broström` otherwise loses the non-ASCII character, exits before
+  starting Node, and may create no agent log. The launcher regression is covered by
+  `test/windows-installer.test.js`; a Windows PC reinstallation/health check remains
+  to be verified. Pushing or deploying the web app does not update PCs.
 - Earlier documentation recorded nShift credentials exposed in a prior conversation.
   Rotation status is unverified; confirm with the owner before production use.
 

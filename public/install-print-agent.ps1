@@ -171,33 +171,41 @@ function Install-Sumatra {
   return $targetExe
 }
 
-function Write-StartScript($NodeExe, $SumatraExe) {
+function Write-StartScript {
   $startCmd = Join-Path $InstallRoot "start-agent.cmd"
+  # Keep this ASCII-only: an absolute user-profile path can contain characters
+  # that Set-Content -Encoding ASCII would replace (for example, Broström).
   $content = @"
 @echo off
+setlocal
 set "PRINTWARD_AGENT_PORT=$Port"
-set "PRINTWARD_PDF_PRINT_EXE=$SumatraExe"
-echo Starting Printward Agent %DATE% %TIME% > "$LogPath"
-echo Node: $NodeExe >> "$LogPath"
-echo App: $AppDir >> "$LogPath"
-if not exist "$NodeExe" (
-  echo Node executable missing: $NodeExe >> "$LogPath"
+set "PRINTWARD_AGENT_ROOT=%LOCALAPPDATA%\PrintwardAgent"
+set "PRINTWARD_AGENT_APP=%PRINTWARD_AGENT_ROOT%\app"
+set "PRINTWARD_AGENT_NODE=%PRINTWARD_AGENT_ROOT%\node\node.exe"
+set "PRINTWARD_PDF_PRINT_EXE=%PRINTWARD_AGENT_ROOT%\tools\SumatraPDF.exe"
+set "PRINTWARD_AGENT_LOG=%PRINTWARD_AGENT_ROOT%\agent.log"
+echo Starting Printward Agent %DATE% %TIME% > "%PRINTWARD_AGENT_LOG%"
+echo Node: %PRINTWARD_AGENT_NODE% >> "%PRINTWARD_AGENT_LOG%"
+echo App: %PRINTWARD_AGENT_APP% >> "%PRINTWARD_AGENT_LOG%"
+if not exist "%PRINTWARD_AGENT_NODE%" (
+  echo Node executable missing: %PRINTWARD_AGENT_NODE% >> "%PRINTWARD_AGENT_LOG%"
   exit /b 1
 )
-if not exist "$AppDir\src\local-agent.js" (
-  echo Agent script missing: $AppDir\src\local-agent.js >> "$LogPath"
+if not exist "%PRINTWARD_AGENT_APP%\src\local-agent.js" (
+  echo Agent script missing: %PRINTWARD_AGENT_APP%\src\local-agent.js >> "%PRINTWARD_AGENT_LOG%"
   exit /b 1
 )
-cd /d "$AppDir"
-"$NodeExe" "$AppDir\src\local-agent.js" >> "$LogPath" 2>&1
-echo Agent exited with code %ERRORLEVEL% >> "$LogPath"
-exit /b %ERRORLEVEL%
+cd /d "%PRINTWARD_AGENT_APP%"
+"%PRINTWARD_AGENT_NODE%" "%PRINTWARD_AGENT_APP%\src\local-agent.js" >> "%PRINTWARD_AGENT_LOG%" 2>&1
+set "PRINTWARD_AGENT_EXIT=%ERRORLEVEL%"
+echo Agent exited with code %PRINTWARD_AGENT_EXIT% >> "%PRINTWARD_AGENT_LOG%"
+exit /b %PRINTWARD_AGENT_EXIT%
 "@
   Set-Content -Path $startCmd -Value $content -Encoding ASCII
   return $startCmd
 }
 
-function Register-StartupLauncher($StartCmd) {
+function Register-StartupLauncher {
   Write-Step "Registering Printward Agent startup"
   $startupDir = [Environment]::GetFolderPath("Startup")
   if (-not $startupDir) {
@@ -207,10 +215,11 @@ function Register-StartupLauncher($StartCmd) {
 
   New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
   $launcher = Join-Path $startupDir "PrintwardAgent.vbs"
-  $escapedStartCmd = $StartCmd.Replace('"', '""')
+  # Resolve LOCALAPPDATA in Windows Script Host so the launcher stays ASCII-only.
   $content = @"
 Set shell = CreateObject("WScript.Shell")
-shell.Run Chr(34) & "$escapedStartCmd" & Chr(34), 0, False
+startCmd = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\PrintwardAgent\start-agent.cmd"
+shell.Run Chr(34) & startCmd & Chr(34), 0, False
 "@
   Set-Content -Path $launcher -Value $content -Encoding ASCII
   Write-Host "Startup launcher: $launcher"
@@ -267,8 +276,8 @@ try {
   $npmCmd = Join-Path $NodeDir "npm.cmd"
   Install-PrintwardApp $npmCmd
   $sumatraExe = Install-Sumatra
-  $startCmd = Write-StartScript $nodeExe $sumatraExe
-  Register-StartupLauncher $startCmd
+  $startCmd = Write-StartScript
+  Register-StartupLauncher
   Start-And-Verify $startCmd
 } finally {
   Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue

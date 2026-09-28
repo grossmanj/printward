@@ -193,6 +193,11 @@ http://127.0.0.1:37951/health
 ```
 
 If Printward still says the agent is unavailable, open Settings and confirm the Local agent URL is exactly `http://127.0.0.1:37951`. The URL is intentionally local: it points to the user's own PC, not the Cloud Run service.
+The Windows installer writes the agent start command and Startup launcher with
+`%LOCALAPPDATA%` expanded at runtime, so Windows profile paths with non-ASCII
+characters work even though those launcher files are ASCII. If installation
+fails, inspect `%LOCALAPPDATA%\PrintwardAgent\agent.log`; after an installer
+update, download and rerun the new script rather than an older copy in Downloads.
 
 ## Configure Google Cloud Storage
 
