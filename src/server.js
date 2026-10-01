@@ -542,6 +542,15 @@ function validateKylPalletAnalysis(order, analysis) {
   if (analysis.labelPages.length === 0) {
     throw new Error(`No pallet label pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
   }
+  if (analysis.unknownLabelPages.length > 0) {
+    throw new Error(`Kyl & Frys label pages could not be matched to chilled or frozen booking for order ${order.orderNumber}: ${analysis.unknownLabelPages.join(', ')}.`);
+  }
+  if (hasCooling && analysis.coolingLabelPages.length === 0) {
+    throw new Error(`No Cooling label pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
+  }
+  if (hasFrozen && analysis.frozenLabelPages.length === 0) {
+    throw new Error(`No Frozen label pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
+  }
   if (hasCooling && analysis.coolingFreightPages.length === 0) {
     throw new Error(`No Cooling freight pages detected in ${order.documents.pallet.fileName || order.documents.pallet.name}.`);
   }
@@ -558,12 +567,17 @@ async function annotateKylPalletLabelPages(storage, orders) {
     const pallet = order.documents.pallet;
     const context = order.context || {};
     const object = await storage.getObject(pallet.name, pallet.source || 'freight', pallet.generation || '');
-    const analysis = await analyzeKylPalletPdf(object.body);
+    const analysis = await analyzeKylPalletPdf(object.body, {
+      freightConsignmentFresh: context.freightConsignmentFresh,
+      freightConsignmentFrozen: context.freightConsignmentFrozen
+    });
     validateKylPalletAnalysis(order, analysis);
     order.context = {
       ...context,
       kylPalletPageGroups: {
         labelPages: analysis.labelPages,
+        coolingLabelPages: analysis.coolingLabelPages,
+        frozenLabelPages: analysis.frozenLabelPages,
         coolingFreightPages: analysis.coolingFreightPages,
         frozenFreightPages: analysis.frozenFreightPages
       }

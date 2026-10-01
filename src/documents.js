@@ -516,22 +516,26 @@ function kylPalletPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   if (!groups?.labelPages?.length) {
     throw new Error(`Kyl & Frys PDF pages for order ${order.orderNumber} have not been verified.`);
   }
-  const labelPages = groups.labelPages;
   const hasCooling = hasValue(context.freightConsignmentFresh);
   const hasFrozen = hasValue(context.freightConsignmentFrozen);
-  const frozenPages = hasFrozen || (!hasCooling && !hasFrozen) ? groups.frozenFreightPages || [] : [];
-  const coolingPages = hasCooling || (!hasCooling && !hasFrozen) ? groups.coolingFreightPages || [] : [];
-  const freightPages = [...frozenPages, ...coolingPages];
-  if (freightPages.length === 0) {
-    throw new Error(`No verified Kyl & Frys freight pages for order ${order.orderNumber}.`);
+  const temperatures = [
+    { key: 'frozen', label: 'Frozen', needed: hasFrozen, labels: groups.frozenLabelPages, freight: groups.frozenFreightPages },
+    { key: 'cooling', label: 'Cooling', needed: hasCooling, labels: groups.coolingLabelPages, freight: groups.coolingFreightPages }
+  ];
+  for (const temperature of temperatures) {
+    if (!temperature.needed && (hasCooling || hasFrozen || !temperature.freight?.length)) continue;
+    if (!temperature.labels?.length || !temperature.freight?.length) {
+      throw new Error(`No verified ${temperature.label} label and freight pages for order ${order.orderNumber}.`);
+    }
+    snapshots.push(printSectionSnapshot(order, `${temperature.key}-freight-packet`, `${temperature.label} labels and freight`, [
+      documentForPrintSection(pallet, {
+        typeLabel: `${temperature.label} labels and freight`,
+        fileName: sectionFileName(pallet, `${temperature.key}-freight-packet`),
+        pages: orderedPageSelection([...temperature.labels, ...temperature.freight])
+      })
+    ]));
   }
-  snapshots.push(printSectionSnapshot(order, 'kyl-freight-packet', 'Labels and freight · stapled per order', [
-    documentForPrintSection(pallet, {
-      typeLabel: 'Labels and freight',
-      fileName: sectionFileName(pallet, 'freight-packet'),
-      pages: orderedPageSelection([...labelPages, ...freightPages])
-    })
-  ]));
+  if (snapshots.length === 0) throw new Error(`No verified Kyl & Frys freight sections for order ${order.orderNumber}.`);
 
   const slipAttachment = ['packingSlip', 'attachment']
     .filter((type) => selected.has(type))

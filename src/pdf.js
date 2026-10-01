@@ -258,6 +258,27 @@ function kylPageKind(text) {
   return 'unknownFreight';
 }
 
+function kylLabelTemperature(text, options = {}) {
+  const normalized = String(text || '').toLowerCase();
+  const searchable = normalized.replace(/[^a-z0-9åäö]/g, '');
+  const bookingMatches = ['cooling', 'frozen'].filter((temperature) => {
+    const booking = temperature === 'cooling' ? options.freightConsignmentFresh : options.freightConsignmentFrozen;
+    const number = String(booking || '').toLowerCase().replace(/[^a-z0-9åäö]/g, '');
+    return number.length >= 4 && searchable.includes(number);
+  });
+  if (bookingMatches.length === 1) return bookingMatches[0];
+
+  const frozen = /froozen|frozen|fryst/.test(normalized);
+  const cooling = /cooling|kyla|kylt/.test(normalized);
+  if (frozen !== cooling) return frozen ? 'frozen' : 'cooling';
+
+  const onlyCooling = Boolean(options.freightConsignmentFresh) && !options.freightConsignmentFrozen;
+  const onlyFrozen = Boolean(options.freightConsignmentFrozen) && !options.freightConsignmentFresh;
+  if (onlyCooling) return 'cooling';
+  if (onlyFrozen) return 'frozen';
+  return 'unknown';
+}
+
 function requirePages(pages, section) {
   if (pages.length === 0) {
     throw new Error(`No pages found for Kyl freight section ${section}.`);
@@ -265,7 +286,7 @@ function requirePages(pages, section) {
   return pages;
 }
 
-export async function analyzeKylPalletPdf(body) {
+export async function analyzeKylPalletPdf(body, options = {}) {
   const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
   const pdfLib = await import('pdf-lib');
   const { PDFDocument } = pdfLib;
@@ -275,9 +296,11 @@ export async function analyzeKylPalletPdf(body) {
 
   for (let index = 0; index < pageCount; index += 1) {
     const text = extractPdfPageText(source, index, pdfLib);
+    const kind = kylPageKind(text);
     pages.push({
       page: index + 1,
-      kind: kylPageKind(text)
+      kind,
+      ...(kind === 'label' ? { labelTemperature: kylLabelTemperature(text, options) } : {})
     });
   }
 
@@ -285,6 +308,9 @@ export async function analyzeKylPalletPdf(body) {
     pageCount,
     pages,
     labelPages: pages.filter((page) => page.kind === 'label').map((page) => page.page),
+    coolingLabelPages: pages.filter((page) => page.labelTemperature === 'cooling').map((page) => page.page),
+    frozenLabelPages: pages.filter((page) => page.labelTemperature === 'frozen').map((page) => page.page),
+    unknownLabelPages: pages.filter((page) => page.labelTemperature === 'unknown').map((page) => page.page),
     coolingFreightPages: pages.filter((page) => page.kind === 'coolingFreight').map((page) => page.page),
     frozenFreightPages: pages.filter((page) => page.kind === 'frozenFreight').map((page) => page.page),
     unknownFreightPages: pages.filter((page) => page.kind === 'unknownFreight').map((page) => page.page)

@@ -127,6 +127,9 @@ test('classifies variable Kyl pallet label pages from page text', async () => {
     hasFrozen: true
   }), 3);
   assert.deepEqual(analysis.labelPages, [1, 2, 3]);
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [2, 3]);
+  assert.deepEqual(analysis.unknownLabelPages, []);
   assert.deepEqual(analysis.coolingFreightPages, [4, 5]);
   assert.deepEqual(analysis.frozenFreightPages, [6, 7, 8]);
 
@@ -139,4 +142,20 @@ test('classifies variable Kyl pallet label pages from page text', async () => {
 
   assert.equal(frozen.getPageCount(), 3);
   assert.deepEqual((await analyzeKylPalletPdf(await frozen.save())).frozenFreightPages, [1, 2, 3]);
+});
+
+test('matches Kyl labels to the correct booking number before separating staples', async () => {
+  const body = await createMarkerPdf([
+    'Kolli-ID 0068602499',
+    'Kolli-ID 0068594456',
+    'FRAKTSEDEL Froozen',
+    'FRAKTSEDEL Cooling'
+  ]);
+  const analysis = await analyzeKylPalletPdf(body, {
+    freightConsignmentFresh: '0068602499',
+    freightConsignmentFrozen: '0068594456'
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [2]);
+  assert.deepEqual(analysis.unknownLabelPages, []);
 });
