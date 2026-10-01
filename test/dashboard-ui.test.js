@@ -38,6 +38,13 @@ test('dispatch, freight and chain lookups expose view-only delivery-method sorti
   assert.match(script, /activeView === 'chains'\) renderChainList\(\)/);
 });
 
+test('freight lookup wires separate review and print controls before selection handlers', () => {
+  assert.match(script, /<button id="reviewFreightSelection"[^>]*>Granska valda<\/button><button class="print-selected"/);
+  assert.match(script, /ordersView\.querySelector\('\.print-selected'\)\.addEventListener\('click'/);
+  assert.match(script, /ordersView\.querySelector\('#selectAllFreightReady'\)\.addEventListener\('change'/);
+  assert.match(script, /ordersView\.querySelectorAll\('\[data-select-freight-order\]'\)/);
+});
+
 test('follow-slip lookup has clickable method bundles and searchable route codes', () => {
   assert.match(html, /aria-label="Sök ort, kund, registreringsnummer, rutt, order eller bokningsnummer"/);
   assert.match(script, /groupDispatchItems\(visibleItems\)/);
