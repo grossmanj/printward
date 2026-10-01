@@ -280,7 +280,14 @@ test('freight-only packet uses verified Eriksson pages without packing documents
 test('freight-only packet uses the DSV freight PDF and refuses changed or unverified documents', () => {
   const order = {
     orderNumber: '200',
-    context: { distributorNo: 50063993, deliveryMethod: 47 },
+    context: {
+      distributorNo: 50063993, deliveryMethod: 47,
+      freightConsignmentFresh: 'CHILLED-200', freightConsignmentFrozen: 'FROZEN-200',
+      dsvFreightPageGroups: {
+        coolingLabelPages: [3], coolingFreightPages: [4, 5],
+        frozenLabelPages: [1], frozenFreightPages: [2]
+      }
+    },
     missingTypes: [],
     documents: {
       freight: { name: 'freight200.pdf', source: 'freight', generation: '2', type: 'freight', fileName: 'freight200.pdf' },
@@ -289,7 +296,12 @@ test('freight-only packet uses the DSV freight PDF and refuses changed or unveri
   };
   const plan = planFreightDocumentSelection([order], 'dsv-finland', ['200']);
   const snapshots = freightOnlyPrintSnapshots([order], plan);
-  assert.deepEqual(snapshots.flatMap((snapshot) => snapshot.documents.map((document) => document.type)), ['freight']);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), ['frozen-dsv-packet', 'cooling-dsv-packet']);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.pages)),
+    [['1', '2'], ['3', '4-5']]);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.pageCopies || 1)),
+    [[1, 4], [1, 4]]);
+  assert.ok(snapshots.every((snapshot) => snapshot.documents.every((document) => document.type === 'freight')));
   order.documents.freight.generation = '3';
   assert.throws(() => freightOnlyPrintSnapshots([order], plan), /has changed/);
 
@@ -505,7 +517,11 @@ test('requests four freight page copies for DB Schenker Finland International', 
 test('DSV Finland keeps four freight copies when the supplier name changes', () => {
   const order = {
     orderNumber: '900004',
-    context: { distributorNo: 50063993, distributorName: 'DSV Finland', deliveryMethod: 47 },
+    context: {
+      distributorNo: 50063993, distributorName: 'DSV Finland', deliveryMethod: 47,
+      freightConsignmentFresh: 'CHILLED-900004',
+      dsvFreightPageGroups: { coolingLabelPages: [], coolingFreightPages: [1, 2] }
+    },
     missingTypes: [],
     documents: { freight: { name: 'freight900004.pdf', source: 'primary', generation: '1', type: 'freight' } }
   };
@@ -513,4 +529,6 @@ test('DSV Finland keeps four freight copies when the supplier name changes', () 
   const [snapshot] = freightOnlyPrintSnapshots([order], plan);
   assert.deepEqual(snapshot.documents.map((document) => document.type), ['freight']);
   assert.equal(snapshot.documents[0].pageCopies, 4);
+  assert.equal(snapshot.documents[0].copyMode, 'perDocument');
+  assert.equal(snapshot.documents[0].pages, '1-2');
 });

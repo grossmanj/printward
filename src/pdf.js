@@ -94,7 +94,7 @@ export function createCenteredTextPdf(text) {
   return Buffer.from(pdf, 'utf8');
 }
 
-export async function repeatPdfPages(body, copies) {
+export async function repeatPdfPages(body, copies, mode = 'perPage') {
   const normalizedCopies = Math.min(20, Math.max(1, Math.trunc(Number(copies || 1))));
   const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
   if (normalizedCopies === 1) return sourceBody;
@@ -103,15 +103,49 @@ export async function repeatPdfPages(body, copies) {
   const source = await PDFDocument.load(sourceBody);
   const repeated = await PDFDocument.create();
 
-  for (const pageIndex of source.getPageIndices()) {
-    const copiedPages = await repeated.copyPages(
-      source,
-      Array.from({ length: normalizedCopies }, () => pageIndex)
-    );
-    for (const page of copiedPages) repeated.addPage(page);
-  }
+  const indices = source.getPageIndices();
+  const orderedIndices = mode === 'perDocument'
+    ? Array.from({ length: normalizedCopies }, () => indices).flat()
+    : indices.flatMap((index) => Array.from({ length: normalizedCopies }, () => index));
+  const copiedPages = await repeated.copyPages(source, orderedIndices);
+  for (const page of copiedPages) repeated.addPage(page);
 
   return Buffer.from(await repeated.save());
+}
+
+export async function analyzeFreightBookingPdf(body, options = {}) {
+  const sourceBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  const pdfLib = await import('pdf-lib');
+  const source = await pdfLib.PDFDocument.load(sourceBody);
+  const bookings = [
+    ['cooling', options.freightConsignmentFresh],
+    ['frozen', options.freightConsignmentFrozen]
+  ].filter(([, value]) => String(value || '').trim());
+  const pages = [];
+
+  for (let index = 0; index < source.getPageCount(); index += 1) {
+    const text = extractPdfPageText(source, index, pdfLib);
+    const searchable = text.toLowerCase().replace(/[^a-z0-9åäö]/g, '');
+    const matches = bookings.filter(([, number]) => {
+      const normalized = String(number).toLowerCase().replace(/[^a-z0-9åäö]/g, '');
+      return normalized.length >= 4 && searchable.includes(normalized);
+    });
+    pages.push({
+      page: index + 1,
+      booking: matches.length === 1 ? matches[0][0] : 'unknown',
+      kind: kylPageKind(text) === 'label' ? 'label' : 'freight'
+    });
+  }
+
+  return {
+    pageCount: pages.length,
+    pages,
+    coolingLabelPages: pages.filter((page) => page.booking === 'cooling' && page.kind === 'label').map((page) => page.page),
+    coolingFreightPages: pages.filter((page) => page.booking === 'cooling' && page.kind === 'freight').map((page) => page.page),
+    frozenLabelPages: pages.filter((page) => page.booking === 'frozen' && page.kind === 'label').map((page) => page.page),
+    frozenFreightPages: pages.filter((page) => page.booking === 'frozen' && page.kind === 'freight').map((page) => page.page),
+    unknownPages: pages.filter((page) => page.booking === 'unknown').map((page) => page.page)
+  };
 }
 
 function parsePageSelection(selection, pageCount) {

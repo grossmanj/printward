@@ -180,6 +180,9 @@ test('dashboard freight print job contains only verified Kyl sections', async (t
   assert.deepEqual(dsvPayload.manifest.orders[0].documents.map((document) => [document.type, document.pageCopies]), [
     ['freight', 4]
   ]);
+  assert.equal(dsvPayload.manifest.orders[0].sectionType, 'cooling-dsv-packet');
+  assert.equal(dsvPayload.manifest.orders[0].documents[0].copyMode, 'perDocument');
+  assert.match(dsvPayload.manifest.orders[0].documents[0].url, /copyMode=perDocument/);
 });
 
 async function openEventStream(handler, pathOrUrl, options = {}) {

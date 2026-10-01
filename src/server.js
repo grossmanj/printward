@@ -8,6 +8,7 @@ import { loadConfig } from './config.js';
 import { createStorageClient } from './gcsClient.js';
 import { attachOrderContexts, createOrderContextClient } from './orderContext.js';
 import {
+  analyzeFreightBookingPdf,
   analyzeKylPalletPdf,
   countPdfPages,
   createCenteredTextPdf,
@@ -29,7 +30,7 @@ import {
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore } from './stateStore.js';
-import { planDashboardPrintSelection, planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
+import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -385,7 +386,7 @@ function buildManifest(req, job) {
 
     const pageCopies = normalizedPageCopies(document.pageCopies);
     if (pageCopies > 1) {
-      params.push('copyMode=perPage');
+      params.push(`copyMode=${document.copyMode === 'perDocument' ? 'perDocument' : 'perPage'}`);
       params.push(`pageCopies=${encodeURIComponent(String(pageCopies))}`);
     }
 
@@ -585,11 +586,46 @@ async function annotateKylPalletLabelPages(storage, orders) {
   });
 }
 
+async function annotateDsvFreightPages(storage, orders) {
+  await mapWithConcurrency(orders.filter((order) => freightPanelForOrder(order) === 'dsv-finland'), 6, async (order) => {
+    const freight = order.documents?.freight;
+    const context = order.context || {};
+    if (!freight) throw new Error(`No DSV waybill PDF for order ${order.orderNumber}.`);
+    if (!hasText(context.freightConsignmentFresh) && !hasText(context.freightConsignmentFrozen)) {
+      throw new Error(`No DSV booking numbers for order ${order.orderNumber}.`);
+    }
+    const object = await storage.getObject(freight.name, freight.source || 'freight', freight.generation || '');
+    const analysis = await analyzeFreightBookingPdf(object.body, {
+      freightConsignmentFresh: context.freightConsignmentFresh,
+      freightConsignmentFrozen: context.freightConsignmentFrozen
+    });
+    if (analysis.unknownPages.length) {
+      throw new Error(`DSV pages cannot be matched to a booking on order ${order.orderNumber}: ${analysis.unknownPages.join(', ')}.`);
+    }
+    if (hasText(context.freightConsignmentFresh) && !analysis.coolingFreightPages.length) {
+      throw new Error(`Missing DSV waybill for chilled booking ${context.freightConsignmentFresh} on order ${order.orderNumber}.`);
+    }
+    if (hasText(context.freightConsignmentFrozen) && !analysis.frozenFreightPages.length) {
+      throw new Error(`Missing DSV waybill for frozen booking ${context.freightConsignmentFrozen} on order ${order.orderNumber}.`);
+    }
+    order.context = {
+      ...context,
+      dsvFreightPageGroups: {
+        coolingLabelPages: analysis.coolingLabelPages,
+        coolingFreightPages: analysis.coolingFreightPages,
+        frozenLabelPages: analysis.frozenLabelPages,
+        frozenFreightPages: analysis.frozenFreightPages
+      }
+    };
+  });
+}
+
 export async function verifyFreightPacket(storage, selectedOrders, plan) {
   if (!plan?.valid || !Array.isArray(plan.orders) || plan.orders.length === 0) {
     throw new Error('A valid freight plan is required before PDF verification.');
   }
   await annotateKylPalletLabelPages(storage, selectedOrders);
+  await annotateDsvFreightPages(storage, selectedOrders);
   const snapshots = freightOnlyPrintSnapshots(selectedOrders, plan);
   const verifiedFiles = await mapWithConcurrency(plan.orders, 6, async (item) => {
     const document = item.document;
@@ -1583,9 +1619,9 @@ async function handleApi(req, res, requestUrl, context) {
     const object = await storage.getObject(name, source, generation);
     const pages = requestUrl.searchParams.get('pages') || '';
     const kylSection = requestUrl.searchParams.get('kylSection') || '';
-    const pageCopies = requestUrl.searchParams.get('copyMode') === 'perPage'
-      ? normalizedPageCopies(requestUrl.searchParams.get('pageCopies'))
-      : 1;
+    const copyMode = requestUrl.searchParams.get('copyMode');
+    const pageCopies = ['perPage', 'perDocument'].includes(copyMode)
+      ? normalizedPageCopies(requestUrl.searchParams.get('pageCopies')) : 1;
     let body = object.body;
     let transformed = false;
 
@@ -1603,7 +1639,7 @@ async function handleApi(req, res, requestUrl, context) {
     }
 
     if (pageCopies > 1) {
-      body = await repeatPdfPages(body, pageCopies);
+      body = await repeatPdfPages(body, pageCopies, copyMode);
       transformed = true;
     }
 

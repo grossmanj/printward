@@ -472,12 +472,19 @@ function renderFreightList() {
       : 'Bokningsnummer saknas';
     return `<li><strong>${escapeHtml(order.orderNumber)} · ${escapeHtml(order.customerName || '–')}</strong><span>${escapeHtml(order.dispatchTime || '–')} · ${escapeHtml(order.deliveryMethodName || order.deliveryMethod || '–')}</span><small>${bookingText}</small><small>${order.document.type === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}: ${escapeHtml(statusLabel(order.document.printStatus))}</small></li>`;
   }).join('');
-  const sectionNames = { 'frozen-freight-packet': 'Fryst · etikett + fraktsedlar · egen häftad bunt', 'cooling-freight-packet': 'Kylt · etikett + fraktsedlar · egen häftad bunt', freight: 'Fraktsedel' };
+  const sectionNames = {
+    'frozen-freight-packet': 'Fryst · etikett + fraktsedlar · egen häftad bunt',
+    'cooling-freight-packet': 'Kylt · etikett + fraktsedlar · egen häftad bunt',
+    'frozen-dsv-packet': 'Fryst DSV · egen häftad bunt',
+    'cooling-dsv-packet': 'Kylt DSV · egen häftad bunt',
+    freight: 'Fraktsedel'
+  };
   const reviewSections = (freightPlan?.sections || []).map((section) => {
     const label = section.sectionType.startsWith('pallet-label-') ? 'Etikett' : sectionNames[section.sectionType] || 'Fraktdokument';
     const pages = section.documents.map((document) => document.pages ? `sida ${escapeHtml(document.pages)}` : 'hela dokumentet').join(' · ');
     const copies = section.documents.some((document) => document.pageCopies > 1)
-      ? ` · ${section.documents.map((document) => `${document.pageCopies} exemplar`).join(' · ')}` : '';
+      ? ` · ${section.documents.filter((document) => document.pageCopies > 1)
+        .map((document) => `${document.pageCopies} exemplar`).join(' · ')}` : '';
     return `<li><strong>Order ${escapeHtml(section.orderNumber)} · ${label}</strong><small>${pages}${copies}</small></li>`;
   }).join('');
   const selection = panel.documentTracking

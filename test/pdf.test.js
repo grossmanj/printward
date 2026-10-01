@@ -3,6 +3,7 @@ import test from 'node:test';
 import { PDFDocument } from 'pdf-lib';
 
 import {
+  analyzeFreightBookingPdf,
   analyzeKylPalletPdf,
   createCenteredTextPdf,
   createPlaceholderPdf,
@@ -50,6 +51,15 @@ test('repeats each PDF page before moving to the next page', async () => {
     [300, 400],
     [300, 400]
   ]);
+});
+
+test('repeats a complete booking PDF before the next copy', async () => {
+  const source = await PDFDocument.create();
+  source.addPage([100, 200]);
+  source.addPage([300, 400]);
+
+  const repeated = await PDFDocument.load(await repeatPdfPages(await source.save(), 3, 'perDocument'));
+  assert.deepEqual(repeated.getPages().map((page) => page.getWidth()), [100, 300, 100, 300, 100, 300]);
 });
 
 test('extracts selected PDF pages', async () => {
@@ -158,4 +168,22 @@ test('matches Kyl labels to the correct booking number before separating staples
   assert.deepEqual(analysis.coolingLabelPages, [1]);
   assert.deepEqual(analysis.frozenLabelPages, [2]);
   assert.deepEqual(analysis.unknownLabelPages, []);
+});
+
+test('matches DSV labels and waybills to the right booking despite mixed PDF page order', async () => {
+  const body = await createMarkerPdf([
+    'FRAKTSEDEL CHILLED-400',
+    'ETIKETT FROZEN-400',
+    'FRAKTSEDEL FROZEN-400',
+    'ETIKETT CHILLED-400'
+  ]);
+  const analysis = await analyzeFreightBookingPdf(body, {
+    freightConsignmentFresh: 'CHILLED-400',
+    freightConsignmentFrozen: 'FROZEN-400'
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [4]);
+  assert.deepEqual(analysis.coolingFreightPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [2]);
+  assert.deepEqual(analysis.frozenFreightPages, [3]);
+  assert.deepEqual(analysis.unknownPages, []);
 });

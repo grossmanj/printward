@@ -550,6 +550,47 @@ function kylPalletPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   return snapshots.filter((snapshot) => snapshot.documents.length > 0);
 }
 
+function dsvFreightPrintSnapshots(order) {
+  const freight = order.documents?.freight;
+  const context = order.context || {};
+  const groups = context.dsvFreightPageGroups;
+  if (!freight || !groups) {
+    throw new Error(`DSV freight PDF pages for order ${order.orderNumber} have not been verified.`);
+  }
+
+  const sections = [];
+  for (const temperature of [
+    { key: 'frozen', label: 'Frozen', booking: context.freightConsignmentFrozen },
+    { key: 'cooling', label: 'Cooling', booking: context.freightConsignmentFresh }
+  ]) {
+    if (!hasValue(temperature.booking)) continue;
+    const labels = groups[`${temperature.key}LabelPages`] || [];
+    const freightPages = groups[`${temperature.key}FreightPages`] || [];
+    if (!freightPages.length) {
+      throw new Error(`No verified DSV waybill pages for ${temperature.label} booking ${temperature.booking} on order ${order.orderNumber}.`);
+    }
+    const documents = [];
+    if (labels.length) {
+      documents.push(documentForPrintSection(freight, {
+        typeLabel: `${temperature.label} labels`,
+        fileName: sectionFileName(freight, `${temperature.key}-labels`),
+        pages: orderedPageSelection(labels)
+      }));
+    }
+    documents.push(documentForPrintSection(freight, {
+      typeLabel: `${temperature.label} waybills`,
+      fileName: sectionFileName(freight, `${temperature.key}-waybills`),
+      pages: orderedPageSelection(freightPages),
+      pageCopies: 4,
+      copyMode: 'perDocument'
+    }));
+    sections.push(printSectionSnapshot(order, `${temperature.key}-dsv-packet`,
+      `${temperature.label} DSV booking ${temperature.booking}`, documents));
+  }
+  if (!sections.length) throw new Error(`No DSV booking numbers for order ${order.orderNumber}.`);
+  return sections;
+}
+
 export function orderToPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   if (usesKylPalletSplit(order)) return kylPalletPrintSnapshots(order, selectedTypes);
   const snapshot = orderToPrintSnapshot(order, selectedTypes);
@@ -589,7 +630,9 @@ export function freightOnlyPrintSnapshots(orders = [], plan = {}) {
       }
     }
 
-    const sections = orderToPrintSnapshots(order, [type]);
+    const sections = plan.panelId === 'dsv-finland'
+      ? dsvFreightPrintSnapshots(order)
+      : orderToPrintSnapshots(order, [type]);
     if (!sections.length || sections.some((section) => section.documents.some((part) => part.type !== type))) {
       throw new Error(`Freight-only packet for order ${number} could not be verified.`);
     }
