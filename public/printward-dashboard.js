@@ -472,7 +472,7 @@ function renderFreightList() {
       : 'Bokningsnummer saknas';
     return `<li><strong>${escapeHtml(order.orderNumber)} · ${escapeHtml(order.customerName || '–')}</strong><span>${escapeHtml(order.dispatchTime || '–')} · ${escapeHtml(order.deliveryMethodName || order.deliveryMethod || '–')}</span><small>${bookingText}</small><small>${order.document.type === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}: ${escapeHtml(statusLabel(order.document.printStatus))}</small></li>`;
   }).join('');
-  const sectionNames = { 'frozen-freight': 'Fryst fraktsedel', 'cooling-freight': 'Kyld fraktsedel', freight: 'Fraktsedel' };
+  const sectionNames = { 'kyl-freight-packet': 'Etiketter + fraktsedlar · häftad bunt per order', 'frozen-freight': 'Fryst fraktsedel', 'cooling-freight': 'Kyld fraktsedel', freight: 'Fraktsedel' };
   const reviewSections = (freightPlan?.sections || []).map((section) => {
     const label = section.sectionType.startsWith('pallet-label-') ? 'Etikett' : sectionNames[section.sectionType] || 'Fraktdokument';
     const pages = section.documents.map((document) => document.pages ? `sida ${escapeHtml(document.pages)}` : 'hela dokumentet').join(' · ');

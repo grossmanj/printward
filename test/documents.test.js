@@ -201,7 +201,7 @@ test('requires pallet documents for Kyl och Frysexpressen orders with reported p
   assert.equal(snapshot.documents[0].pageCopies, undefined);
 });
 
-test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
+test('staples Kyl labels first with frozen and chilled freight per order, leaving slips separate', () => {
   const orders = attachOrderContexts(buildOrders([
     { name: 'order1001.pdf', updated: '2026-06-24T08:00:00.000Z', generation: '1' },
     { name: 'parti1001.pdf', updated: '2026-06-24T08:01:00.000Z', generation: '2' },
@@ -228,26 +228,14 @@ test('splits Kyl och Frysexpressen pallet packets into print sections', () => {
   const snapshots = orderToPrintSnapshots(required[0], ['pallet', 'packingSlip', 'attachment', 'freight']);
 
   assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
-    'pallet-label-1',
-    'pallet-label-2',
-    'pallet-label-3',
-    'frozen-freight',
-    'cooling-freight',
+    'kyl-freight-packet',
     'slip-attachment'
   ]);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.type)), [
     ['pallet'],
-    ['pallet'],
-    ['pallet'],
-    ['pallet'],
-    ['pallet'],
     ['packingSlip', 'attachment']
   ]);
-  assert.equal(snapshots[0].documents[0].pages, '1');
-  assert.equal(snapshots[1].documents[0].pages, '2');
-  assert.equal(snapshots[2].documents[0].pages, '3');
-  assert.equal(snapshots[3].documents[0].pages, '6-8');
-  assert.equal(snapshots[4].documents[0].pages, '4-5');
+  assert.equal(snapshots[0].documents[0].pages, '1-3,6-8,4-5');
 });
 
 test('freight-only packet uses verified Eriksson pages without packing documents', () => {
@@ -276,10 +264,10 @@ test('freight-only packet uses verified Eriksson pages without packing documents
   const plan = planFreightDocumentSelection([order], 'eriksson', ['100']);
   const snapshots = freightOnlyPrintSnapshots([order], plan);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
-    'pallet-label-1', 'pallet-label-2', 'frozen-freight', 'cooling-freight'
+    'kyl-freight-packet'
   ]);
   assert.ok(snapshots.every((snapshot) => snapshot.documents.every((document) => document.type === 'pallet')));
-  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents[0].pages), ['1', '2', '3', '4']);
+  assert.deepEqual(snapshots.map((snapshot) => snapshot.documents[0].pages), ['1-4']);
 });
 
 test('freight-only packet uses the DSV freight PDF and refuses changed or unverified documents', () => {
@@ -396,15 +384,12 @@ test('allows external freight documents to print while warehouse packing is left
   assert.equal(isPrintBlockedByPacking(required[0]), false);
   assert.deepEqual(printTypes, ['pallet']);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.sectionType), [
-    'pallet-label-1',
-    'pallet-label-2',
-    'cooling-freight'
+    'kyl-freight-packet'
   ]);
   assert.deepEqual(snapshots.map((snapshot) => snapshot.documents.map((document) => document.type)), [
-    ['pallet'],
-    ['pallet'],
     ['pallet']
   ]);
+  assert.equal(snapshots[0].documents[0].pages, '1-4');
 });
 
 test('keeps external packing-left orders blocked until freight documents are ready', () => {

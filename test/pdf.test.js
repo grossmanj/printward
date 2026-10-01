@@ -70,6 +70,14 @@ test('extracts selected PDF pages', async () => {
   ]);
 });
 
+test('keeps labels first when a Kyl packet selects later frozen pages before chilled pages', async () => {
+  const source = await PDFDocument.create();
+  for (const width of [101, 102, 103, 104, 105, 106]) source.addPage([width, 200]);
+
+  const packet = await PDFDocument.load(await extractPdfPages(await source.save(), '1-2,5-6,3-4'));
+  assert.deepEqual(packet.getPages().map((page) => page.getWidth()), [101, 102, 105, 106, 103, 104]);
+});
+
 test('extracts Kyl frozen and cooling freight sections after pallet pages', async () => {
   const body = await createMarkerPdf([
     'Kolli-ID 1 1962465_Cooling',

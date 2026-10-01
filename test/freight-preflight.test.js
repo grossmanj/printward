@@ -47,9 +47,9 @@ test('read-only PDF preflight verifies actual mock page order for chilled and fr
   const result = await verifyFreightPacket(storage, [order], plan);
   assert.equal(result.verifiedFiles[0].pageCount, 4);
   assert.deepEqual(result.sections.map((section) => section.sectionType), [
-    'pallet-label-1', 'pallet-label-2', 'frozen-freight', 'cooling-freight'
+    'kyl-freight-packet'
   ]);
-  assert.deepEqual(result.sections.map((section) => section.documents[0].pages), ['1', '2', '3', '4']);
+  assert.deepEqual(result.sections.map((section) => section.documents[0].pages), ['1-4']);
   assert.ok(result.sections.every((section) => section.documents.every((document) => document.type === 'pallet')));
 });
 
@@ -61,7 +61,7 @@ test('Eriksson uses the same PDF preflight and DSV verifies a freight-only PDF',
   const erikssonPlan = planFreightDocumentSelection([eriksson], 'eriksson', ['900002']);
   const erikssonResult = await verifyFreightPacket(storage, [eriksson], erikssonPlan);
   assert.deepEqual(erikssonResult.sections.map((section) => section.sectionType), [
-    'pallet-label-1', 'cooling-freight'
+    'kyl-freight-packet'
   ]);
 
   const dsv = {

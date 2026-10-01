@@ -164,7 +164,7 @@ test('dashboard freight print job contains only verified Kyl sections', async (t
   assert.equal(response.status, 201);
   const payload = await response.json();
   assert.deepEqual(payload.manifest.orders.map((section) => section.sectionType), [
-    'pallet-label-1', 'pallet-label-2', 'frozen-freight', 'cooling-freight'
+    'kyl-freight-packet'
   ]);
   assert.ok(payload.manifest.orders.every((section) => section.documents.every((document) => document.type === 'pallet')));
 

@@ -486,10 +486,10 @@ function hasValue(value) {
   return String(value || '').trim().length > 0;
 }
 
-function compactPageSelection(pages = []) {
+function orderedPageSelection(pages = []) {
   const values = Array.from(new Set(
     pages.map((page) => Math.trunc(Number(page))).filter((page) => Number.isInteger(page) && page > 0)
-  )).sort((left, right) => left - right);
+  ));
   const ranges = [];
 
   for (let index = 0; index < values.length; index += 1) {
@@ -505,85 +505,33 @@ function compactPageSelection(pages = []) {
   return ranges.join(',');
 }
 
-function kylPalletPageCount(order) {
-  const context = order.context || {};
-  const inferred = Math.trunc(Number(context.kylPalletLabelPages || context.kylPalletPageGroups?.labelPages?.length || 0)) || 0;
-  if (inferred > 0) return Math.max(1, Math.min(100, inferred));
-
-  const consignmentCount = [
-    context.freightConsignmentFresh,
-    context.freightConsignmentFrozen
-  ].filter(hasValue).length || (Array.isArray(context.freightConsignmentNumbers) ? context.freightConsignmentNumbers.length : 0);
-
-  return Math.max(1, Math.min(100, consignmentCount || 1));
-}
-
-function kylPalletLabelPages(order) {
-  const pages = order.context?.kylPalletPageGroups?.labelPages;
-  if (Array.isArray(pages) && pages.length > 0) return pages;
-  return Array.from({ length: kylPalletPageCount(order) }, (_, index) => index + 1);
-}
-
-function kylFreightSectionDocument(order, section, label) {
-  const pallet = order.documents.pallet;
-  const context = order.context || {};
-  const groupKey = section === 'frozenFreight' ? 'frozenFreightPages' : 'coolingFreightPages';
-  const pages = context.kylPalletPageGroups?.[groupKey];
-  const pageSelection = Array.isArray(pages) && pages.length > 0 ? compactPageSelection(pages) : '';
-  return documentForPrintSection(pallet, {
-    typeLabel: label,
-    fileName: sectionFileName(pallet, section),
-    ...(pageSelection
-      ? { pages: pageSelection }
-      : {
-          kylSection: {
-            section,
-            labelPages: kylPalletPageCount(order),
-            hasCooling: hasValue(context.freightConsignmentFresh),
-            hasFrozen: hasValue(context.freightConsignmentFrozen)
-          }
-        })
-  });
-}
-
 function kylPalletPrintSnapshots(order, selectedTypes = DOCUMENT_ORDER) {
   const selected = new Set(selectedTypes);
   const snapshots = [];
   const pallet = order.documents.pallet;
   if (!selected.has('pallet') || !pallet) return [orderToPrintSnapshot(order, selectedTypes)];
 
-  const labelPages = kylPalletLabelPages(order);
-  for (const page of labelPages) {
-    snapshots.push(printSectionSnapshot(order, `pallet-label-${page}`, `Pallet page ${page}`, [
-      documentForPrintSection(pallet, {
-        typeLabel: `Pallet page ${page}`,
-        fileName: sectionFileName(pallet, `pallet-${page}`),
-        pages: String(page)
-      })
-    ]));
-  }
-
   const context = order.context || {};
+  const groups = context.kylPalletPageGroups;
+  if (!groups?.labelPages?.length) {
+    throw new Error(`Kyl & Frys PDF pages for order ${order.orderNumber} have not been verified.`);
+  }
+  const labelPages = groups.labelPages;
   const hasCooling = hasValue(context.freightConsignmentFresh);
   const hasFrozen = hasValue(context.freightConsignmentFrozen);
-
-  if (hasFrozen) {
-    snapshots.push(printSectionSnapshot(order, 'frozen-freight', 'Frozen freight', [
-      kylFreightSectionDocument(order, 'frozenFreight', 'Frozen freight')
-    ]));
+  const frozenPages = hasFrozen || (!hasCooling && !hasFrozen) ? groups.frozenFreightPages || [] : [];
+  const coolingPages = hasCooling || (!hasCooling && !hasFrozen) ? groups.coolingFreightPages || [] : [];
+  const freightPages = [...frozenPages, ...coolingPages];
+  if (freightPages.length === 0) {
+    throw new Error(`No verified Kyl & Frys freight pages for order ${order.orderNumber}.`);
   }
-
-  if (hasCooling) {
-    snapshots.push(printSectionSnapshot(order, 'cooling-freight', 'Cooling freight', [
-      kylFreightSectionDocument(order, 'coolingFreight', 'Cooling freight')
-    ]));
-  }
-
-  if (!hasFrozen && !hasCooling) {
-    snapshots.push(printSectionSnapshot(order, 'freight', 'Freight', [
-      kylFreightSectionDocument(order, 'remainingFreight', 'Freight')
-    ]));
-  }
+  snapshots.push(printSectionSnapshot(order, 'kyl-freight-packet', 'Labels and freight · stapled per order', [
+    documentForPrintSection(pallet, {
+      typeLabel: 'Labels and freight',
+      fileName: sectionFileName(pallet, 'freight-packet'),
+      pages: orderedPageSelection([...labelPages, ...freightPages])
+    })
+  ]));
 
   const slipAttachment = ['packingSlip', 'attachment']
     .filter((type) => selected.has(type))
