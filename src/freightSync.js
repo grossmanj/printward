@@ -1,5 +1,6 @@
 import { GcsClient } from './gcsClient.js';
 import { NshiftConsignmentClient } from './nshiftClient.js';
+import { analyzeFreightBookingPdf } from './pdf.js';
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -85,6 +86,7 @@ function normalizeShipment(row, config = {}) {
     consignments,
     deliveryDate: Number(row.DelDt || 0) || null,
     deliveryMethod: Number(row.DelMt || 0) || null,
+    supplierNo: Number(row.SupNo || 0) || null,
     deliveryMethodName: String(row.DeliveryMethodName || '').trim(),
     distributorName: String(row.DistributorName || '').trim(),
     dispatchPriority: Number(row.DelPri || 0) || null,
@@ -163,6 +165,7 @@ export async function fetchBookedFreightShipments(config) {
   request.input('frInfTp3', sql.Int, config.nshift.frInfTp3);
   request.input('fromDelDt', sql.Int, fromDelDt);
   request.input('toDelDt', sql.Int, toDelDt);
+  request.input('dsvLabelTestOrder', sql.Int, Number(config.nshift.dsvLabelTestOrderNumber || 0));
 
   statuses.forEach((status, index) => {
     request.input(`status${index}`, sql.Int, status);
@@ -206,6 +209,7 @@ export async function fetchBookedFreightShipments(config) {
       AND f.FrInfTp3 = @frInfTp3
       AND f.Val1 IN (${statusSql})
       AND f.OrdNo <> 0
+      AND (@dsvLabelTestOrder = 0 OR f.OrdNo = @dsvLabelTestOrder)
       AND ISNULL(o.TrTp, 0) = 1
       AND ISNULL(o.SupNo, 0) > 0
       AND ISNULL(o.SupNo, 0) NOT IN (55058127)
@@ -255,6 +259,42 @@ async function getExistingObject(storage, objectName) {
   return storage.getObjectMetadata(objectName);
 }
 
+function isDsvShipment(shipment) {
+  return [47, 48].includes(Number(shipment.deliveryMethod)) || Number(shipment.supplierNo) === 50063993;
+}
+
+async function fetchDsvLabelTestPdf(nshift, shipment) {
+  const pages = [];
+  for (const consignment of shipment.consignments) {
+    const labelDocuments = filterPdfDocuments(await nshift.printDocuments([consignment.consignmentNo], {
+      printOperation: 'print', printType: 1, printFormat: 'PDF'
+    })).filter((document) => !document.type || Number(document.type) === 1);
+    if (!labelDocuments.length) {
+      throw new Error(`nShift returned no PDF label for DSV booking ${consignment.consignmentNo}.`);
+    }
+    const waybillDocuments = filterPdfDocuments(await nshift.printDocuments([consignment.consignmentNo], {
+      printOperation: 'printWaybill'
+    }));
+    if (!waybillDocuments.length) {
+      throw new Error(`nShift returned no PDF waybill for DSV booking ${consignment.consignmentNo}.`);
+    }
+    pages.push(...labelDocuments.map((document) => document.body), ...waybillDocuments.map((document) => document.body));
+  }
+
+  const body = await mergePdfBuffers(pages);
+  const analysis = await analyzeFreightBookingPdf(body, {
+    freightConsignmentFresh: shipment.consignments.find((item) => item.kind === 'fresh')?.consignmentNo,
+    freightConsignmentFrozen: shipment.consignments.find((item) => item.kind === 'frozen')?.consignmentNo
+  });
+  if (analysis.unknownPages.length || shipment.consignments.some((item) => {
+    const prefix = item.kind === 'frozen' ? 'frozen' : 'cooling';
+    return !analysis[`${prefix}LabelPages`]?.length || !analysis[`${prefix}FreightPages`]?.length;
+  })) {
+    throw new Error(`DSV label/waybill PDF could not be verified for order ${shipment.orderNumber}; no file was uploaded.`);
+  }
+  return body;
+}
+
 export async function syncFreightDocuments(config, overrides = {}) {
   if (!config.nshift.outputBucket) {
     throw new Error('NSHIFT_OUTPUT_GCS_BUCKET, FREIGHT_GCS_BUCKET, or GCS_BUCKET is required for freight sync output.');
@@ -262,6 +302,21 @@ export async function syncFreightDocuments(config, overrides = {}) {
 
   const allShipments = overrides.shipments || await fetchBookedFreightShipments(config);
   const shipments = applyAllowList(allShipments, config);
+  const dsvLabelTestOrderNumber = String(config.nshift.dsvLabelTestOrderNumber || '').trim();
+  const dsvLabelTestConsignmentNumber = String(config.nshift.dsvLabelTestConsignmentNumber || '').trim();
+  const allowedTestOrders = normalizeList(config.nshift.allowedOrderNumbers);
+  if (dsvLabelTestOrderNumber && (
+    config.nshift.allowAll ||
+    !config.nshift.forceRefresh ||
+    !dsvLabelTestConsignmentNumber ||
+    allowedTestOrders.size !== 1 || !allowedTestOrders.has(dsvLabelTestOrderNumber) ||
+    normalizeList(config.nshift.allowedConsignmentNumbers).size > 0 ||
+    shipments.length !== 1 ||
+    shipments.some((shipment) => shipment.orderNumber !== dsvLabelTestOrderNumber || !isDsvShipment(shipment) ||
+      shipment.consignments.length !== 1 || shipment.consignments[0].consignmentNo !== dsvLabelTestConsignmentNumber)
+  )) {
+    throw new Error('DSV label test requires exactly one allow-listed DSV order and matching booking, force refresh, and NSHIFT_ALLOW_ALL=false.');
+  }
   const fetchEnabled = config.nshift.fetchEnabled === true || Boolean(overrides.nshiftClient);
   const allowListActive = (config.nshift.allowedOrderNumbers || []).length > 0
     || (config.nshift.allowedConsignmentNumbers || []).length > 0;
@@ -343,9 +398,13 @@ export async function syncFreightDocuments(config, overrides = {}) {
         : null;
       let body = null;
       if (!existingFreight) {
-        const documents = await nshift.printDocuments(consignmentNumbers);
-        const pdfs = filterPdfDocuments(documents).map((document) => document.body);
-        body = await mergePdfBuffers(pdfs);
+        if (shipment.orderNumber === dsvLabelTestOrderNumber && isDsvShipment(shipment)) {
+          body = await fetchDsvLabelTestPdf(nshift, shipment);
+        } else {
+          const documents = await nshift.printDocuments(consignmentNumbers);
+          const pdfs = filterPdfDocuments(documents).map((document) => document.body);
+          body = await mergePdfBuffers(pdfs);
+        }
 
         upload = config.nshift.dryRun
           ? { uploaded: false, skipped: true, dryRun: true, name: objectName }

@@ -63,9 +63,13 @@ The nShift sync runs separately; printing in the web app does not call nShift.
 - Job creation rejects missing label pages, missing cooling/frozen sections
   expected from consignment context, and unknown freight pages. Preserve this
   validation if nShift changes its PDF layout.
-- Each label is its own print section, followed by frozen freight, cooling freight,
-  and finally slip plus attachment together when packing permits. Sections use
-  selected pages from the original bundle; never assume fixed page counts.
+- Kyl/Eriksson use separate frozen and chilled print sections within each
+  order. Each section starts with the label pages matched to its booking number
+  (or an unambiguous temperature marker), followed by its freight pages. The
+  sections are stapled separately, and slip plus attachment remain another
+  section when packing permits. Unknown label-to-booking matches fail closed.
+  Selected pages come from dynamic PDF analysis, never fixed offsets or pallet
+  counts.
 - The local agent submits each section as a separate OS print job, preserving
   stapling boundaries. Normal orders are one job per packet. Windows uses
   SumatraPDF with a printer queue whose driver supplies stapling preferences;
@@ -745,3 +749,135 @@ are verification needs, not claims that the running system is broken.
   `PRINTWARD_DASHBOARD_PRINT_ENABLED=true`. Anonymous dashboard access still
   redirected to `/login`. The post-login redirect is covered by the regression
   test, but a real PC login remains to be checked by the user.
+
+### 2026-09-29 office-PC print diagnosis (Krillos)
+
+- The Print Agent on the office Windows PC was reachable at
+  `http://127.0.0.1:37951` and reported 14 printer queues. The demo browser
+  settings explicitly selected `kf-direkt` with one copy. This is a separate
+  Ricoh/NRG MP C4504ex PCL 6 queue on RAW port 9100 to `10.3.3.213`; TCP port
+  9100 responded. Windows' system default remained the Zebra label printer,
+  which was **not** the printer named in the latest Printward job.
+- Demo job for order `1989176` was recorded as `printed`, targeting `kf-direkt`,
+  but the office observer reported no paper. Windows PrintService Operational
+  had no corresponding spool event around that job. Do not treat this job's
+  Printward status as proof of physical output or retry a batch blindly.
+- The bundled SumatraPDF version is 3.6.1. A PowerShell no-paper control
+  invocation with a deliberately missing PDF produced no usable
+  `$LASTEXITCODE` (blank), not a confirmed zero. The previous agent nevertheless
+  treated a successfully launched Sumatra process as `printed` without checking
+  the Windows spooler. The absence of a PrintService event for order `1989176`
+  confirms that its app status is not evidence of Windows spool completion.
+- For the next **single-order** smoke test only, the demo browser on Krillos
+  retains explicit `kf-direkt`, one copy, simplex, and has its
+  `Häfta per order` checkbox unchecked to remove finishing as a variable.
+  Recheck/restore finishing after actual output is witnessed and the Ricoh
+  queue's staple preference is verified. The Windows default printer and
+  SecurePrint setup were not changed. No further physical job was sent during
+  this diagnosis; obtain an observer before the next paper test.
+- The local repository now has `src/windows-spool.js` and agent integration:
+  before launching Sumatra it reads the latest PrintService Operational event
+  307 record ID, then waits for a newer 307 on the selected queue before posting
+  `printed`. The callback also rejects non-2xx responses. This is Windows spool
+  confirmation, **not proof that the Ricoh delivered paper**; another concurrent
+  job on the same queue could satisfy the queue-level event check. If the check
+  times out, the app gets a failed job with a warning to inspect the queue before
+  retrying, because late printing could otherwise cause duplicates.
+- On Krillos only, the updated `local-agent.js` and `windows-spool.js` were
+  transferred through Chrome Remote Desktop, matched local SHA-256 values, and
+  installed in `%LOCALAPPDATA%\PrintwardAgent\app\src`. The original agent was
+  preserved as `local-agent.js.pre-spool-20260929.bak`. Only the verified agent
+  process listening on port 37951 was restarted. The new process returned
+  `/health` with `canPrint:true`, and its Windows spool module successfully read
+  existing 307 events. A no-paper, same-record-ID check correctly rejected
+  `kf-direkt`. No real document was submitted after this update. The installed
+  Windows installer still downloads GitHub `main`; rerunning it before these
+  changes are merged would overwrite this Krillos-only hotfix. No GitHub push,
+  Cloud Run deployment, production service, default printer, or SecurePrint
+  setting was changed. Local Node 22 test suite: 94/94 passed (`node --test`;
+  the temporary runtime lacks npm's CLI). A one-order physical smoke test with
+  an observer at the printer remains required.
+
+### 2026-10-01 physical staple check and freight-selection fix
+
+- Two single-order follow-slip tests were submitted from `printward-demo` on
+  Krillos to `kf-direkt`. The first, with Printward's **Häfta per order** off,
+  reached Windows as one two-page job but the observer found the slip stapled
+  alone and the attachment separate. The Ricoh queue already had upper-left
+  stapling enabled. For the second order, the Printward checkbox was turned on;
+  the observer confirmed that slip and attachment came out stapled together.
+  This is a printer/driver observation, not a cross-printer guarantee. The
+  checkbox adds SumatraPDF `collate`; Windows stapling remains a queue setting.
+  Both documents were subsequently marked printed in demo. The observer also
+  reported thicker-looking text than Visma output; no font or printer-quality
+  setting was changed, and a same-order side-by-side comparison remains to be
+  done before attributing the difference to PDF rendering or the driver.
+- A proposed two-order Kyl & Frys test found a deployed UI defect before any
+  freight job was created: the checkboxes changed visually but the selection
+  counter stayed at zero, and **Skriv ut valda** did not respond. In
+  `renderFreightList`, a listener was registered for a nonexistent
+  `.print-selected` element before the selection handlers. The fix adds
+  separate **Granska valda** and **Skriv ut valda** buttons, preserving the
+  read-only PDF review and explicit confirmation for real printing. It was
+  pushed to `demo` as `ea577d0` and the live lookup showed both controls.
+  Orders `1988702` and `1989211` were then printed from Kyl & Frys; the user
+  reported good physical output. The demo job showed `printed` and the lookup
+  subsequently showed the current pallet generations as printed.
+- A first grouping change (`0e2b92a`) combined each order's labels and chilled/
+  frozen waybills into one staple section. The real PDF preflight showed one
+  section for order `1989251`, and one physical test job reached `printed` on
+  `kf-direkt` with `staple:true`. The user confirmed the page order was correct
+  but the grouping was wrong: chilled and frozen must be separate stapled
+  bundles **within** the order, not one common bundle.
+- The correction (`54a6a55`) classifies label pages by their booking number or
+  an unambiguous chilled/frozen marker, then creates two sections with each
+  label before its own waybill pages. Ambiguous label ownership fails the
+  read-only preflight. The real PDF preflight for two-booking order `1989331`
+  showed two sections; its one test job reached `printed` on `kf-direkt` with
+  `documentCount:2` and `staple:true`. The user physically confirmed two
+  correct, separately stapled bundles with the right label first in each.
+  No nShift fetch or production deployment was performed for these print
+  tests. The latest local Node 22.18.0 suite passed 98/98 (`node --test`; npm
+  CLI is absent on this Mac).
+
+### 2026-10-01 DSV booking packets (in progress)
+
+- Edmark reported DSV output unsorted and requested Kyl-style separation.
+  Printward's existing DSV rule repeated every page four times, so a multi-page
+  PDF would become A A A A B B B B, not complete booking packets. The new
+  implementation classifies DSV PDF pages by the exact `FreeInf1.Txt1`/`Txt2`
+  booking number, sorts frozen then chilled, and makes one stapled section per
+  booking. If a label page exists in the source PDF, it precedes four complete
+  waybill copies in that booking's section. No label is synthesized when the
+  current `printWaybill` source contains waybills only. Missing or ambiguous
+  booking pages fail preflight and the print endpoint closed.
+- Read-only live inspection on Krillos of DSV order `1986736` for 2026-10-01
+  showed two Visma booking numbers but a one-page freight PDF visibly containing
+  only the chilled number. This is evidence of an incomplete stored PDF, not
+  proof of why it is incomplete. Freight sync currently skips an existing
+  `freight{order}.pdf` without comparing its booking set; a later-added booking
+  or a partial allow-list run could explain this. Do not print this order or
+  assume the dashboard's document-available count proves both bookings exist.
+- Local Node 22.18.0 `node --test` passed 101/101 after the code change and
+  focused regression tests. No live nShift call or physical DSV print has been
+  made. A real PDF preflight, demo deployment verification, and one observed
+  physical order test remain required. Keep this repository state distinct
+  from the currently deployed demo until the deployment is checked.
+
+- A later single-booking DSV order `1987752` (booking `200158213419`) was
+  physically submitted from Krillos through demo and became `Utskriven` in
+  Printward. The observer confirmed four waybill sheets stapled together but
+  **no label**. Its source PDF was waybill-only because the sync used
+  `printWaybill`; this was not a printer omission. The test therefore proved
+  four-copy stapling, not the final label-first packet.
+- An explicit one-booking **demo-only** label fetch path is now in local code.
+  `NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER` and
+  `NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER` must match one allow-listed DSV
+  order and its only current Visma booking. The SQL query restricts to that
+  order before `TOP`; it requires force refresh and rejects a second booking
+  before any nShift call. It requests a label using `print` type 1 and a
+  waybill using `printWaybill`, merges label first, and rejects missing or
+  ambiguous booking/page classification before upload. Test suite: 104/104 via
+  Node 22.18.0 `node --test`; npm CLI symlink is incomplete in the temporary
+  runtime. This text describes repository state, not a deployed demo job or a
+  completed label-inclusive paper test.

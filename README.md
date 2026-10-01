@@ -158,15 +158,30 @@ freight-only plan without creating a print job. The existing generic
 `/api/print-jobs` route can add required packing documents and must not be
 used directly for these freight-only dashboard buttons.
 
-A separate freight-only packet builder is now tested but deliberately not
-connected to print-job creation. It requires an unchanged document version and
-verified Kyl/Eriksson PDF page groups before creating label/waybill sections.
+A separate freight-only packet builder requires an unchanged document version
+and verified PDF page groups before creating booking-specific sections.
 The **Granska fraktdokument** action also calls the read-only
 `POST /api/dashboard/freight-packet-check` endpoint. It reads the selected PDFs,
 validates their pages, and displays the actual section order; malformed or
 unrecognized Kyl/Eriksson PDFs fail closed. The fictional local pallet PDFs for
 `900001`–`900005` contain labeled test pages only and do not represent a carrier
-layout. No print job is created.
+layout. This read-only review creates no print job; the demo's separate print
+action uses the same verification before creating one.
+
+For Kyl & Frys and Eriksson, verified pallet PDF pages are split into separate
+stapled bundles for **fryst** and **kylt** within each order. Each bundle starts
+with the label(s) matched to that booking, followed by its freight pages.
+Orders remain separate, and any packing slip plus attachment is another packet.
+If the PDF cannot identify which booking owns a label, preflight stops rather
+than guessing. The freight review shows the exact page sequence before printing.
+
+DSV Finland uses the same per-booking separation: fryst and kylt become distinct
+stapled sections within each order, with any labels in the source PDF first and
+four complete waybill copies after them. A DSV PDF that lacks one of the booked
+waybills is rejected in preview and printing instead of silently printing an
+incomplete packet. The current nShift `printWaybill` source may contain only
+waybills; Printward does not invent missing label pages. Existing freight PDFs
+must be checked for completeness before a physical DSV test.
 
 In another terminal, start the local print agent:
 
@@ -193,6 +208,13 @@ http://127.0.0.1:37951/health
 ```
 
 If Printward still says the agent is unavailable, open Settings and confirm the Local agent URL is exactly `http://127.0.0.1:37951`. The URL is intentionally local: it points to the user's own PC, not the Cloud Run service.
+On Windows, the agent now waits for a new PrintService Operational event 307 on
+the selected printer queue before reporting a packet as printed. A SumatraPDF
+process exit alone is not sufficient. This confirms Windows spool completion,
+not that paper was physically collected. If no event arrives, the job fails with
+an instruction to check the queue and printer before retrying, since delayed
+output remains possible. The Windows PrintService Operational log must be
+enabled. Do not use a physical printer as an automated test.
 The Windows installer writes the agent start command and Startup launcher with
 `%LOCALAPPDATA%` expanded at runtime, so Windows profile paths with non-ASCII
 characters work even though those launcher files are ASCII. If installation
@@ -263,6 +285,18 @@ The sync job:
 - For `Kyl- och Frysexpressen Mälardalen AB` orders with booked consignments, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`, including when reported pallet counts are zero.
 - Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
+
+For a **single DSV demo label test**, opt in with
+`NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER` and
+`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER`, and set the same order in
+`NSHIFT_ALLOWED_ORDER_NUMBERS`. This test path requires exactly one matching
+booked DSV consignment, `NSHIFT_ALLOW_ALL=false`, and
+`NSHIFT_FORCE_REFRESH=true`; it queries only that order. It calls nShift for
+one PDF label and one waybill, verifies both pages against the booking number,
+and uploads a label-first PDF only if the page checks pass. Do not enable it on
+the recurring sync job or use it for an order with both chilled and frozen
+bookings until a separate multi-booking test is approved. nShift print calls
+may change its document-print history even when the GCS upload fails.
 
 Default demo output:
 
@@ -533,6 +567,10 @@ customers remain view-only until their document rules are verified. For the
 demo service, keep `PRINTWARD_LEGACY_PRINT_ENABLED=false` so the older generic
 job endpoint cannot bypass these dashboard-specific checks, and keep
 `NSHIFT_FETCH_ENABLED=false` to avoid live nShift calls while testing.
+The freight lookup has distinct **Granska valda** and **Skriv ut valda** actions.
+The former checks the exact document pages without creating a job; the latter
+requires a separate confirmation before sending the selected orders to the
+local agent. Do not use the overview's all-ready button for a small test.
 
 Before enabling writes on `printward-demo`, use a demo-specific Datastore
 namespace and a dedicated runtime service account. Datastore User IAM is
