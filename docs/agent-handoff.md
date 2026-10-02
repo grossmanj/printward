@@ -982,3 +982,39 @@ are verification needs, not claims that the running system is broken.
 - Krillos is offline as of this review, so current agent process, printer queue,
   event-log status and physical output could not be rechecked. No print job,
   nShift call, GitHub push, Cloud Run deploy, or Windows installation was made.
+
+### 2026-10-02 demo agent-status guard rollout
+
+- The user requested an urgent, status-safe path for Edmark to test. The agent
+  hotfix, Windows spool-event checks, browser guard against older Windows agents,
+  and controlled `-SourceBranch demo` installer option were committed as
+  `09f17898f2db20be63f37ae0aca949ff98bd9716`. Unrelated local DSV source
+  changes were left uncommitted. The remote `demo` SHA was verified to match.
+  The local Node 22.18.0 `node --test` suite passed 110/110; `npm` is not on
+  this Mac's PATH, so `npm test` itself could not run here. `git diff --check`
+  was clean.
+- Before the push, `printward-demo` was at revision
+  `printward-demo-00029-lgc` with `F0002`, GCS prefix `2/`, demo runtime service
+  account, dashboard printing enabled, legacy printing disabled, and nShift
+  fetching disabled. The image-only auto-deploy build
+  `44ebe025-295c-4788-b7aa-5f228121e18a` succeeded and Cloud Run revision
+  `printward-demo-00030-b5q` serves image tag matching `09f17898`. The
+  authenticated browser showed real demo printing active and the date-scoped
+  2026-09-30 return `1990006` after reload. No nShift or physical print was
+  triggered during this rollout; `printward-prod` was not changed.
+- Chrome Remote Desktop currently lists Krillos and Kristoffers, but not
+  Edmark's PC. Edmark was unavailable at rollout time, so his installed agent
+  and printer queue were **not** changed or verified. He must update his
+  existing per-user agent from the verified `demo` branch, check `/health` for
+  `canPrint: true` and `spoolConfirmation: true`, select his actual printer
+  queue, and run one observed order before relying on new status. The dashboard
+  now blocks an older Windows agent, but old demo print events remain in
+  history; some pre-hotfix `Utskriven` states, notably order `1989176`, do
+  not prove paper output. Even the new Event 307 check confirms Windows spool
+  completion on the selected queue, not physical delivery; it currently
+  matches queue and a newer event ID, so another simultaneous queue job could
+  theoretically satisfy the check. Do not use automatic or unattended bulk
+  printing as a verification step.
+- The return view remains date-scoped and its form 220 print action disabled.
+  Return `1990006` appears when delivery date 2026-09-30 is selected, but is
+  not yet a persistent cross-date worklist or an actual printed-status flow.
