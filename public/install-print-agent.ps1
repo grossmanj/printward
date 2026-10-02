@@ -1,6 +1,12 @@
 # Printward local print agent installer for Windows.
 # Run in PowerShell on the PC that has the printer installed:
 #   powershell -ExecutionPolicy Bypass -File .\install-print-agent.ps1
+# For a controlled demo-branch update of an existing agent, add -SourceBranch demo.
+
+param(
+  [ValidateSet("main", "demo")]
+  [string]$SourceBranch = "main"
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -11,7 +17,7 @@ $ToolsDir = Join-Path $InstallRoot "tools"
 $LogPath = Join-Path $InstallRoot "agent.log"
 $TempDir = Join-Path $env:TEMP ("printward-agent-install-" + [guid]::NewGuid().ToString("N"))
 $Port = 37951
-$RepoZipUrl = "https://codeload.github.com/grossmanj/printward/zip/refs/heads/main"
+$RepoZipUrl = "https://codeload.github.com/grossmanj/printward/zip/refs/heads/$SourceBranch"
 $NodeIndexUrl = "https://nodejs.org/dist/latest-v20.x/"
 $SumatraZipUrl = "https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip"
 
@@ -111,7 +117,7 @@ function Install-Node {
 
 function Install-PrintwardApp($NpmCmd) {
   Write-Step "Installing Printward agent files"
-  $repoZip = Join-Path $TempDir "printward-main.zip"
+  $repoZip = Join-Path $TempDir "printward-$SourceBranch.zip"
   Download-File $RepoZipUrl $repoZip
   Expand-Archive -Path $repoZip -DestinationPath $TempDir -Force
 

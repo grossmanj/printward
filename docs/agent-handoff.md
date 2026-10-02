@@ -881,3 +881,104 @@ are verification needs, not claims that the running system is broken.
   Node 22.18.0 `node --test`; npm CLI symlink is incomplete in the temporary
   runtime. This text describes repository state, not a deployed demo job or a
   completed label-inclusive paper test.
+
+- Commit `7c9c3c4` was pushed to `demo`; Cloud Build
+  `42195509-e3e6-452e-a6c4-d88210030d7b` succeeded and
+  `printward-demo` runs that image. The demo freight-sync job was updated to
+  the same image and given existing nShift Secret Manager references, but its
+  **default** remains `NSHIFT_FETCH_ENABLED=false`, `NSHIFT_SYNC_DRY_RUN=true`,
+  zero retries. A one-execution, SQL-only override for order `1987847`, booking
+  `200158214793`, and `2026-09-24` completed successfully with one preview
+  result and no nShift/GCS write.
+- The one approved nShift fetch override for that same booking (`lh8xn`)
+  returned label and waybill pages that passed booking/page analysis, but GCS
+  rejected the upload with 403: the job service account's conditional
+  `storage.objectAdmin` binding permits only `freight/2/`. The isolated
+  `freight/demo-dsv-label-20261001/` prefix was not writable. Therefore no
+  test PDF was stored and **no second physical DSV job was submitted**. Demo
+  and prod both currently read `freight/2/`; never write the test PDF there
+  without separately assessing prod impact. A narrowly conditioned creator
+  permission and one explicit retry are awaiting user approval. Do not
+  silently repeat nShift `print` or `printWaybill` since they may register
+  document history. This status supersedes the earlier local-only paragraph.
+- The user explicitly approved a narrow GCS permission and one rerun.
+  Conditional `roles/storage.objectCreator` on only
+  `freight/demo-dsv-label-20261001/` was granted to the existing job account,
+  execution `printward-freight-sync-demo-2lc2g` succeeded, and
+  `freight1987847.pdf` was created there (17,250 bytes, generation
+  `1790864799114918`). The temporary creator binding was immediately removed
+  and confirmed absent; existing production-prefix permissions were unchanged.
+  `printward-demo` revision `printward-demo-00028-gkb` temporarily read this
+  isolated test prefix. On Krillos, Printward's freight-packet check selected
+  exactly order `1987847` and showed one chilled DSV packet with pages 1–2,
+  including four copies of the waybill page. The local Print Agent health
+  endpoint returned `canPrint: true` and its printer setting was `kf-direkt`,
+  simplex, one copy, staple per order. The settings dialog's separate agent
+  test timed out while enumerating printers; PowerShell checks confirmed both
+  `/health` and `/printers` answered locally. One real print was submitted
+  through the Printward UI; the list changed to `Dokument finns · Utskriven`
+  for `1987847`. This confirms the app/agent accepted the job, **not** the
+  physical page order or staple; the user was asked to inspect the output.
+  No second physical job was submitted. Demo was then restored to
+  `FREIGHT_GCS_PREFIX=freight/2/` on revision `printward-demo-00029-lgc`,
+  which serves 100% traffic; a service describe returned `freight/2/`.
+  `printward-prod` was unchanged throughout. The user's photo of the physical
+  output shows the label at the front with a staple in its upper-left corner,
+  order reference `1987847_Chilled`, and booking `200158214793`. The visible
+  label still says `Schenker Finland International` even though the Printward
+  group is named DSV Finland; this is an nShift document/template branding
+  question, not evidence of a different Printward route. The user subsequently
+  confirmed all output was stapled together in one neat packet. The photo and
+  confirmation do not separately prove the exact waybill page count. The
+  carrier text is part of the nShift-supplied label PDF; Printward does not
+  draw or rename it. Check the carrier service/label template in nShift before
+  changing printed branding.
+
+### 2026-10-01 release-scope and agent review (local only)
+
+- The user confirmed DSV Finland must keep chilled and frozen in **separate
+  stapled booking packets**. The booking-page classifier and packet builder
+  implement this and have synthetic tests. The guarded nShift label test now
+  accepts one exact allow-listed order with either one booking or an exact
+  chilled/frozen pair, fetching label and waybill separately for each before
+  merging and verifying. Preflight and printing now require a matching label
+  as well as a waybill for every DSV booking; a waybill-only legacy PDF fails
+  closed. The synthetic DSV fixtures include label-first pages. No nShift call
+  was made for this change. A real two-booking DSV PDF and
+  physical output are not yet verified. Do not use the successful single-booking
+  label-first test as evidence for that two-booking requirement.
+- The first release is intended to cover own-car Tidig/FM/EM packing slip plus
+  attachment, Kyl & Frys, DSV Finland and Eriksson freight, required Yama and
+  ChopChop packing documents, and pickups. Best Transport waits for its
+  integration. Pickup document/template rules, especially the Swish invoice,
+  still require confirmation and must not be represented as print-ready.
+- Returns should remain in an actionable queue across delivery dates until a
+  real print is confirmed or an operator closes them as handled another way.
+  The current `/api/returns` endpoint is still date-scoped and return printing
+  is disabled; no persistent return disposition has been implemented yet.
+  On 2026-10-02 the user showed that Visma prints returns through
+  **Orderbekräftelser → Standard formulär 220, Retursedel**. In the open Visma
+  Returer view, order **1990006** dated **2026-09-30** has `Gr3=30` and its
+  read-only preview renders that exact one-page Retursedel. A subsequent
+  single-order test used **Skriv till PDF** and also tried the default
+  **Cameyo Virtual Printer**: both opened a PDF in the remote Visma/Cameyo
+  Windows session, not on Krillos or in Printward. No physical print was
+  verified. This manual UI export is not a verified automated PDF source for
+  Printward. Return slips should be printed without stapling, even if future
+  templates contain multiple pages. Do not substitute `order{number}.pdf` or
+  mark a return printed until its actual print is confirmed.
+- The Windows agent spool-confirmation hotfix exists locally and on Krillos,
+  but it is not in GitHub `main`. The current installer downloads `main`, so
+  running it on another PC today would install the older agent. The agent now
+  advertises `spoolConfirmation: true` and the dashboard rejects older Windows
+  agents for real printing. Its `/printers` diagnostic gets a longer timeout
+  and cannot turn a successful health check into a false "agent not ready".
+  The local agent also restricts browser origins to the configured Printward
+  URLs; new app URLs require `PRINTWARD_AGENT_ALLOWED_ORIGINS`. The existing
+  Windows installer now accepts `-SourceBranch demo` for a controlled update
+  of the same per-user agent while retaining `main` as its default; it does not
+  create or alter a printer queue. These are local
+  repository changes only, not deployed or installed on Edmark's PC.
+- Krillos is offline as of this review, so current agent process, printer queue,
+  event-log status and physical output could not be rechecked. No print job,
+  nShift call, GitHub push, Cloud Run deploy, or Windows installation was made.

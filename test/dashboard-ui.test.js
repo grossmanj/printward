@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const html = readFileSync(new URL('../public/printward-dashboard.html', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/printward-dashboard.js', import.meta.url), 'utf8');
+const agent = readFileSync(new URL('../src/local-agent.js', import.meta.url), 'utf8');
 
 test('overview quick-print controls start disabled and require server print capability', () => {
   const buttons = [...html.matchAll(/<button class="quick-print"[^>]*>/g)].map(([tag]) => tag);
@@ -12,6 +13,13 @@ test('overview quick-print controls start disabled and require server print capa
   assert.equal((html.match(/>Visa avgångar<\/span>/g) || []).length, 5);
   assert.match(script, /realPrintingEnabled = payload\.dashboardPrintingEnabled === true/);
   assert.match(script, /\/api\/dashboard\/print-jobs/);
+});
+
+test('Windows dashboard printing rejects an old agent without spool confirmation', () => {
+  assert.match(agent, /spoolConfirmation: true/);
+  assert.match(script, /details\.platform === 'win32' && !details\.spoolConfirmation/);
+  assert.match(script, /agent\.platform === 'win32' && !agent\.spoolConfirmation/);
+  assert.match(script, /Print Agent är redo, men skrivarköerna kunde inte hämtas/);
 });
 
 test('document review links use the selected PDF generation', () => {

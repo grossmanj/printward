@@ -167,11 +167,25 @@ async function testPrinterSettings() {
     const response = await fetch(`${agent.origin}/health`, { signal: AbortSignal.timeout(3000) });
     const details = response.ok ? await response.json() : {};
     if (!details.canPrint) throw new Error('Agenten svarar, men skrivarbryggan är inte redo.');
-    const printers = await fetch(`${agent.origin}/printers`, { signal: AbortSignal.timeout(3000) });
-    const printerPayload = printers.ok ? await printers.json() : {};
-    document.querySelector('#printPrinterList').innerHTML = (printerPayload.printers || [])
-      .map((printer) => `<option value="${escapeHtml(printer.name)}"></option>`).join('');
-    status.textContent = `Print Agent är redo · ${(printerPayload.printers || []).length} skrivarköer hittades.`;
+    if (details.platform === 'win32' && !details.spoolConfirmation) {
+      throw new Error('Agenten är en äldre version utan bekräftelse från Windows utskriftskö. Uppdatera den innan riktig utskrift.');
+    }
+    status.textContent = 'Print Agent är redo. Hämtar skrivarköer…';
+    try {
+      // Windows printer enumeration can take longer than the health check.
+      const printers = await fetch(`${agent.origin}/printers`, { signal: AbortSignal.timeout(15000) });
+      if (!printers.ok) throw new Error(`HTTP ${printers.status}`);
+      const printerPayload = await printers.json();
+      const queues = printerPayload.printers || [];
+      document.querySelector('#printPrinterList').innerHTML = queues
+        .map((printer) => `<option value="${escapeHtml(printer.name)}"></option>`).join('');
+      const selected = document.querySelector('#printPrinter').value.trim();
+      status.textContent = selected && !queues.some((printer) => printer.name === selected)
+        ? `Print Agent är redo, men skrivarkön ”${selected}” finns inte på denna dator.`
+        : `Print Agent är redo · ${queues.length} skrivarköer hittades.`;
+    } catch (error) {
+      status.textContent = `Print Agent är redo, men skrivarköerna kunde inte hämtas: ${error.message}`;
+    }
   } catch (error) { status.textContent = `Agenten är inte redo: ${error.message}`; }
 }
 
@@ -186,6 +200,9 @@ async function printDashboardItems(kind, panelId, label, items) {
     const health = await fetch(`${defaults.agentUrl}/health`, { signal: AbortSignal.timeout(3000) });
     const agent = health.ok ? await health.json() : null;
     if (!agent?.canPrint) throw new Error('Print Agent är inte redo på den här datorn. Öppna skrivarinställningarna och testa agenten.');
+    if (agent.platform === 'win32' && !agent.spoolConfirmation) {
+      throw new Error('Print Agent måste uppdateras innan riktig utskrift; den äldre versionen kan ge felaktig utskriftsstatus.');
+    }
     const response = await fetch('/api/dashboard/print-jobs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -920,7 +937,7 @@ const returnDepartureLabels = { early: 'Tidig', morning: 'Förmiddag', afternoon
 
 function openReturnDetails(context) {
   title.textContent = `Returorder ${context.orderNumber}`;
-  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Avgång</dt><dd>${escapeHtml(returnDepartureLabels[context.returnDeparture] || 'Utan avgångstid')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Returregel</dt><dd>Gr3 30 · Retur hämtas</dd></dl><p>Returdokument och utskriftsmall är ännu inte verifierade.</p><button class="quick-print" type="button" disabled title="Returdokument och utskriftsregel är inte verifierade">Skriv ut retur</button>`;
+  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Avgång</dt><dd>${escapeHtml(returnDepartureLabels[context.returnDeparture] || 'Utan avgångstid')} · ${escapeHtml(context.dispatchTime || '–')}</dd><dt>Returregel</dt><dd>Gr3 30 · Retur hämtas</dd></dl><p>Returmall: Visma formulär 220 (Retursedel). PDF-export till Printward är inte ansluten ännu.</p><button class="quick-print" type="button" disabled title="PDF-export för Visma formulär 220 saknas ännu">Skriv ut retur</button>`;
   dialog.showModal();
 }
 
@@ -953,7 +970,7 @@ function renderReturnList(payload) {
     .filter(Boolean).join(' ').toLowerCase().includes(query));
   const selected = returns.filter((context) => selectedReturnOrders.has(String(context.orderNumber)));
   const rows = returns.map((context) => `<tr data-return-order="${escapeHtml(context.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-return-order="${escapeHtml(context.orderNumber)}" aria-label="Markera retur ${escapeHtml(context.orderNumber)}" ${selectedReturnOrders.has(String(context.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(context.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(returnDepartureLabels[context.returnDeparture] || 'Utan avgångstid')} · ${escapeHtml(context.dispatchTime || '–')}</td><td><span class="order-status missing">Retur att hämta</span></td></tr>`).join('');
-  const selection = `<div class="dispatch-selection"><label><input id="selectAllReturns" type="checkbox" ${returns.length ? '' : 'disabled'} ${returns.length && returns.every((context) => selectedReturnOrders.has(String(context.orderNumber))) ? 'checked' : ''}> Markera alla i listan</label><span>${selected.length} valda</span><button id="reviewReturnSelection" type="button" ${selected.length ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" disabled title="Returdokument och utskriftsregel är inte verifierade">Skriv ut valda</button></div>`;
+  const selection = `<div class="dispatch-selection"><label><input id="selectAllReturns" type="checkbox" ${returns.length ? '' : 'disabled'} ${returns.length && returns.every((context) => selectedReturnOrders.has(String(context.orderNumber))) ? 'checked' : ''}> Markera alla i listan</label><span>${selected.length} valda</span><button id="reviewReturnSelection" type="button" ${selected.length ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" disabled title="PDF-export för Visma formulär 220 saknas ännu">Skriv ut valda</button></div>`;
   const review = returnReviewOpen && selected.length
     ? `<section class="dispatch-review"><h2>Valda returer · ${selected.length}</h2><p>Avgången kommer från orderns DelPri; utskriftsmallen är inte verifierad.</p><ol>${selected.map((context) => `<li><strong>Order ${escapeHtml(context.orderNumber)} · ${escapeHtml(context.customerName || context.deliveryName || '–')}</strong><small>${escapeHtml(returnDepartureLabels[context.returnDeparture] || 'Utan avgångstid')} · ${escapeHtml(context.dispatchTime || '–')}</small></li>`).join('')}</ol></section>`
     : '';

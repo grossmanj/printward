@@ -5,9 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { PDFDocument } from 'pdf-lib';
+import { confirmWindowsSpool, getPrintedEvents, newestPrintedEventId } from './windows-spool.js';
+import { agentOriginAllowed, allowedAgentOrigins } from './agentAccess.js';
 
 const execFileAsync = promisify(execFile);
 const AGENT_PORT = Number(process.env.PRINTWARD_AGENT_PORT || 37951);
+const ALLOWED_ORIGINS = allowedAgentOrigins();
 
 function logFatalError(label, error) {
   console.error(`[${label}] ${error?.stack || error?.message || error}`);
@@ -22,10 +25,10 @@ process.on('unhandledRejection', (error) => {
   logFatalError('unhandledRejection', error);
 });
 
-function sendJson(res, statusCode, payload) {
+function sendJson(res, statusCode, payload, origin = null) {
   res.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': '*',
+    ...(origin ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {}),
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-headers': 'content-type',
     'access-control-allow-private-network': 'true'
@@ -218,16 +221,24 @@ async function printWithSumatra(order, files, printerName, options, dir) {
   if (settings) args.push('-print-settings', settings);
 
   const normalizedPrinter = normalizePrinterName(printerName || options.printerName);
-  if (normalizedPrinter) args.push('-print-to', normalizedPrinter);
-  else args.push('-print-to-default');
+  const targetPrinter = normalizedPrinter || (await listWindowsPrinters()).find((printer) => printer.isDefault)?.name;
+  if (!targetPrinter) throw new Error('No Windows printer selected or set as default.');
+  args.push('-print-to', targetPrinter);
   args.push(packetPath);
 
+  // Sumatra's process exit alone does not prove that Windows accepted a print job.
+  // Capture the event-log watermark before submission and wait for a new 307 event
+  // on the selected queue before reporting the document as printed.
+  const baseline = newestPrintedEventId(await getPrintedEvents());
   const { stdout, stderr } = await execFileAsync(printBridge, args, { windowsHide: true });
+  await confirmWindowsSpool({ printerName: targetPrinter, baseline });
   return {
     orderNumber: order.orderNumber,
     command: 'SumatraPDF',
     fileCount: files.length,
-    output: `${stdout || ''}${stderr || ''}`.trim()
+    output: `${stdout || ''}${stderr || ''}`.trim(),
+    printerName: targetPrinter,
+    spoolConfirmed: true
   };
 }
 
@@ -257,7 +268,9 @@ async function printCapability() {
     const printBridge = await findWindowsPdfPrintBridge();
     return {
       canPrint: Boolean(printBridge),
-      printBridge: printBridge ? path.basename(printBridge) : null
+      printBridge: printBridge ? path.basename(printBridge) : null,
+      spoolConfirmation: true,
+      originProtection: true
     };
   }
 
@@ -270,11 +283,12 @@ async function printCapability() {
 
 async function reportCompletion(callbackUrl, payload) {
   if (!callbackUrl) return;
-  await fetch(callbackUrl, {
+  const response = await fetch(callbackUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload)
   });
+  if (!response.ok) throw new Error(`Print job completion callback failed: HTTP ${response.status}`);
 }
 
 async function handlePrint(body) {
@@ -318,8 +332,13 @@ async function handlePrint(body) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin || null;
+  if (!agentOriginAllowed(origin, ALLOWED_ORIGINS)) {
+    sendJson(res, 403, { error: 'This web page is not allowed to use the Print Agent.' });
+    return;
+  }
   if (req.method === 'OPTIONS') {
-    sendJson(res, 204, {});
+    sendJson(res, 204, {}, origin);
     return;
   }
 
@@ -333,29 +352,33 @@ const server = http.createServer(async (req, res) => {
         platform: os.platform(),
         hostname: os.hostname(),
         ...capability
-      });
+      }, origin);
       return;
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/printers') {
       const printers = await listPrinters();
-      sendJson(res, 200, { printers });
+      sendJson(res, 200, { printers }, origin);
       return;
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/print') {
+      if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) {
+        sendJson(res, 415, { error: 'Print requests must use application/json.' }, origin);
+        return;
+      }
       const body = await readJsonBody(req);
       const result = await handlePrint(body);
-      sendJson(res, 200, result);
+      sendJson(res, 200, result, origin);
       return;
     }
 
-    sendJson(res, 404, { error: 'Agent route not found.' });
+    sendJson(res, 404, { error: 'Agent route not found.' }, origin);
   } catch (error) {
     sendJson(res, 500, {
       error: error.message,
       results: error.results || []
-    });
+    }, origin);
   }
 });
 

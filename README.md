@@ -14,6 +14,8 @@ The app shows whether each current document version has been printed. If a PDF i
 For development and agent continuity, start with [AGENTS.md](AGENTS.md) and the
 [agent handoff](docs/agent-handoff.md). The handoff records current business rules,
 architecture, test coverage, and operational details that must survive between tasks.
+The current first-release scope and evidence gates are in
+[docs/release-checklist.md](docs/release-checklist.md).
 
 ## Why there is a local print agent
 
@@ -201,6 +203,14 @@ On Windows, users can click **Install print agent** in Printward Settings to dow
 powershell -ExecutionPolicy Bypass -File .\install-print-agent.ps1
 ```
 
+This updates the agent files in the existing per-user installation and does
+not create or change a Windows printer queue. Its default source is GitHub
+`main`. For a controlled `demo`-branch update, use
+`powershell -ExecutionPolicy Bypass -File .\install-print-agent.ps1 -SourceBranch demo`
+only after the intended agent commit has been pushed and verified on `demo`.
+Do not use the default installer to replace a Krillos-only hotfix before that
+hotfix is in `main`.
+
 Then verify the browser on that same PC can reach:
 
 ```text
@@ -208,6 +218,15 @@ http://127.0.0.1:37951/health
 ```
 
 If Printward still says the agent is unavailable, open Settings and confirm the Local agent URL is exactly `http://127.0.0.1:37951`. The URL is intentionally local: it points to the user's own PC, not the Cloud Run service.
+The new dashboard distinguishes a successful agent health check from a slow or
+failed Windows printer-list query. For real dashboard printing on Windows it
+also requires an agent that reports `spoolConfirmation: true`; an older agent
+cannot be trusted to mark documents printed. Browser calls to the agent are
+accepted only from configured Printward origins. Set
+`PRINTWARD_AGENT_ALLOWED_ORIGINS` to a comma-separated list of exact origins
+when using a new app URL; the built-in list covers the current demo and
+production Cloud Run URLs and local development ports 3100–3103. Direct local
+PowerShell health checks do not send an Origin header and remain available.
 On Windows, the agent now waits for a new PrintService Operational event 307 on
 the selected printer queue before reporting a packet as printed. A SumatraPDF
 process exit alone is not sufficient. This confirms Windows spool completion,
