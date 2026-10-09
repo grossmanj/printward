@@ -303,19 +303,23 @@ export async function syncFreightDocuments(config, overrides = {}) {
   const allShipments = overrides.shipments || await fetchBookedFreightShipments(config);
   const shipments = applyAllowList(allShipments, config);
   const dsvLabelTestOrderNumber = String(config.nshift.dsvLabelTestOrderNumber || '').trim();
-  const dsvLabelTestConsignmentNumber = String(config.nshift.dsvLabelTestConsignmentNumber || '').trim();
+  const dsvLabelTestConsignments = normalizeList(config.nshift.dsvLabelTestConsignmentNumbers);
+  const legacyDsvTestConsignment = String(config.nshift.dsvLabelTestConsignmentNumber || '').trim();
+  if (legacyDsvTestConsignment) dsvLabelTestConsignments.add(legacyDsvTestConsignment);
   const allowedTestOrders = normalizeList(config.nshift.allowedOrderNumbers);
   if (dsvLabelTestOrderNumber && (
     config.nshift.allowAll ||
     !config.nshift.forceRefresh ||
-    !dsvLabelTestConsignmentNumber ||
+    dsvLabelTestConsignments.size < 1 || dsvLabelTestConsignments.size > 2 ||
     allowedTestOrders.size !== 1 || !allowedTestOrders.has(dsvLabelTestOrderNumber) ||
     normalizeList(config.nshift.allowedConsignmentNumbers).size > 0 ||
     shipments.length !== 1 ||
     shipments.some((shipment) => shipment.orderNumber !== dsvLabelTestOrderNumber || !isDsvShipment(shipment) ||
-      shipment.consignments.length !== 1 || shipment.consignments[0].consignmentNo !== dsvLabelTestConsignmentNumber)
+      shipment.consignments.length !== dsvLabelTestConsignments.size ||
+      shipment.consignments.some((item) => !dsvLabelTestConsignments.has(item.consignmentNo)) ||
+      new Set(shipment.consignments.map((item) => item.kind)).size !== shipment.consignments.length)
   )) {
-    throw new Error('DSV label test requires exactly one allow-listed DSV order and matching booking, force refresh, and NSHIFT_ALLOW_ALL=false.');
+    throw new Error('DSV label test requires exactly one allow-listed DSV order and its exact one or two bookings, force refresh, and NSHIFT_ALLOW_ALL=false.');
   }
   const fetchEnabled = config.nshift.fetchEnabled === true || Boolean(overrides.nshiftClient);
   const allowListActive = (config.nshift.allowedOrderNumbers || []).length > 0

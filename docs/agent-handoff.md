@@ -81,6 +81,38 @@ The nShift sync runs separately; printing in the web app does not call nShift.
 
 ### SQL and UI
 
+- A 2026-10-02 Visma cash/Swish example uses the manual Fakturor/kreditnotor
+  print dialog with standard form 365, **Faktura B&N**. This identifies the
+  required template, not an automated invoice-generation interface. The
+  proposed rule applies to **all delivery methods**: use the **order's**
+  `Ord.PmtTrm`, not customer `Actor.CPmtTrm`, to select a new invoice form 365
+  plus partibilaga instead of följesedel plus partibilaga. Pickup Swish badging
+  currently uses `Ord.PmtTrm=1`; confirm that code and any other cash terms
+  against real orders. These orders are not yet invoiced: Visma invoice print
+  and approval creates the invoice. A PDF-only Print Agent cannot do that.
+  Local dashboard/server code blocks the normal packing-slip print path for
+  proposed code 1. Do not enable invoice print until finance/IT verifies a
+  supported Visma creation/approval flow, PDF retrieval, duplicate protection,
+  and the resulting accounting state. No live invoicing was tested.
+  A viable one-button design has two stages: request Visma's own invoice
+  **Print to PDF** for the exact order with form 365 and complete its normal
+  approval; only after approval, resolve the resulting PDF and send it with
+  the partibilaga to the Printward agent. Visma documents that Print to PDF
+  writes a copy to the configured Fax/e-mail route and may delete it when
+  approval is cancelled. This is a design candidate, not an implemented or
+  validated integration. Determine the supported command/automation interface,
+  configured output path, read access, and unambiguous invoice/order mapping
+  before adding any automatic button. The existing SQL connection stays read-only.
+  Current owner decision (2026-10-05): defer Swish/cash invoice printing in
+  Printward. Operators continue printing these invoices directly in Visma.
+  Keep the dashboard's ordinary packing-slip path blocked for these orders;
+  do not enable automatic invoicing or treat a Printward print status as an
+  invoice status. The two-stage design above remains a future option only.
+- Tidig/FM/EM följesedel counts mean **klara för utskrift**: both paper
+  documents exist and packing is complete. They are not printed counts.
+- The overview's virtual-print controls, status note, and printer settings sit
+  in the top filter row after the distributor selector. This is a layout
+  change only; print eligibility and agent behavior are unchanged.
 - Dispatch grouping uses `DelDt + DelPri + DelMt`; `DelPri` is an hour (`6` means
   `06:00`). Distributor filtering deduplicates by trimmed, case-insensitive name,
   falling back to distributor number where needed.
@@ -194,10 +226,10 @@ printer validation was performed for this documentation update.
   grouping, not proof that an own-car route has actually been assigned.
 - `GET /api/pickups?deliveryDate=YYYY-MM-DD` is a separate read-only query
   because the normal order query excludes `DelMt=6`. It includes `6` (customer
-  pickup), `16` (courier), and `42`–`46` (taxi). `Actor.CPmtTrm=1` adds a Swish
-  badge only to customer pickups. The actor value is read with the same first
-  customer actor lookup as the customer name; verify this against real Visma
-  examples before relying on it operationally. `Actor.R12=60` together with
+  pickup), `16` (courier), and `42`–`46` (taxi). `Ord.PmtTrm=1` adds a Swish
+  badge only to customer pickups. The customer `Actor.CPmtTrm` remains
+  available as reference but never overrides the order. Verify term code 1
+  against real Visma examples before relying on it operationally. `Actor.R12=60` together with
   `Ord.DelMt=6` is a separate staff-order row within the pickup area, excluded
   from the ordinary customer-pickup subtotal. The dashboard previews three
   non-staff pickup orders, with a full read-only list when more exist.
@@ -1018,3 +1050,45 @@ are verification needs, not claims that the running system is broken.
 - The return view remains date-scoped and its form 220 print action disabled.
   Return `1990006` appears when delivery date 2026-09-30 is selected, but is
   not yet a persistent cross-date worklist or an actual printed-status flow.
+
+### 2026-10-09 Edmark follow-up (local repository work)
+
+- Own-car Tidig/FM/EM now mean before 08:00, 09:00–10:00, and 13:00–16:00
+  respectively. Orders at 08:00, 11:00, and 12:00 remain outside those quick
+  cards and are counted in the caution message; this is an explicit gap, not a
+  reassignment. Green ready counts exclude packets whose slip and attachment
+  are both already printed; the dark total still includes them.
+- Every own-car `DelMt` bundle has a print-ready-only action (at most 200 orders).
+  Own-car, freight, and chain rows have an explicit **Visa order** button;
+  clicking elsewhere in a selectable row no longer opens details accidentally.
+  Closing a detail dialog leaves the lookup and checked selection intact.
+  Print-job creation still revalidates every order
+  against current server data and requires operator confirmation.
+- Yama/ChopChop chain panels and their print authorization now include only
+  confirmed remote freight. Own-car orders remain in Tidig/FM/EM and cannot be
+  printed again through the chain panel; unknown transport is not assumed to
+  be remote. Chain printed/total counts refer only to this remote subset.
+- Freight bulk selection and quick printing leave orders with no `Txt1`/`Txt2`
+  booking visible but skip them. This does **not** relax PDF preflight: any
+  selected order with an incomplete or ambiguous source PDF still blocks its
+  whole print request. Existing Finland waybill-only PDFs remain blocked from
+  label-first printing. The ordinary nShift sync is not yet verified to store
+  label pages for every DSV booking; the one-off test path is not a general fix.
+- Separate chilled/frozen print buttons are intentionally not enabled yet.
+  Printward marks the entire freight PDF generation printed after a job;
+  printing one booking alone would incorrectly mark the other temperature
+  printed. First add per-booking/section completion state and verify retries,
+  counters, and label matching before exposing that choice.
+- The read-only SQL join for visible delivery method already uses `Ord.DelMt`
+  and `Txt.TxtNo = o.DelMt`, not the customer card. Edmark's report that a
+  *printed* order shows the customer's normal route needs a concrete Visma
+  order example with before/after values to identify where the assigned
+  registration is stored. No alternate field was guessed or substituted.
+- Local Node test suite: 116 tests passed using the bundled Node CLI. No live
+  nShift call, physical print, Windows agent update, GitHub push, Cloud Run
+  deploy, or production change was made in this pass. The worktree also
+  contains pre-existing staged and unstaged changes; those were preserved.
+  Browser QA used a temporary, local read-only mock on port 3111: on
+  2026-06-25 a ready order remained selected after its **Visa order** dialog
+  was closed; clicking the customer cell did not open that dialog. The local
+  server was stopped afterward. The real demo service has not been updated.

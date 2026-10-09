@@ -118,6 +118,7 @@ export function loadConfig(env = process.env) {
       palletPrintFormat: env.NSHIFT_PALLET_PRINT_FORMAT || env.NSHIFT_PRINT_FORMAT || 'PDF',
       dsvLabelTestOrderNumber: String(env.NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER || '').trim(),
       dsvLabelTestConsignmentNumber: String(env.NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER || '').trim(),
+      dsvLabelTestConsignmentNumbers: parseList(env.NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBERS, []),
       palletCopyFields: parseList(env.NSHIFT_PALLET_COPY_FIELDS, DEFAULT_PALLET_COPY_FIELDS),
       palletDocumentDistributors: parseList(env.NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS, DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS),
       timeoutMs: Number(env.NSHIFT_TIMEOUT_MS || 30_000),

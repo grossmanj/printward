@@ -196,13 +196,19 @@ export function pickupKindForContext(context = {}) {
   return null;
 }
 
+// A cash invoice is created by Visma when its invoice form is approved.
+// Until that operation is integrated, a packing slip must not stand in for it.
+export function requiresCashInvoice(context = {}) {
+  return Number(context.orderPaymentTerm) === 1;
+}
+
 export function summarizePickups(contexts = []) {
   const pickups = contexts
     .map((context) => ({
       ...context,
       pickupKind: pickupKindForContext(context),
       staffOrder: Number(context.deliveryMethod) === 6 && Number(context.customerChainNo) === 60,
-      swishPayment: Number(context.customerPaymentTerm) === 1 && Number(context.deliveryMethod) === 6
+      swishPayment: requiresCashInvoice(context) && Number(context.deliveryMethod) === 6
     }))
     .filter((context) => context.pickupKind)
     .sort((a, b) => Number(a.dispatchPriority || 99) - Number(b.dispatchPriority || 99)
@@ -233,9 +239,9 @@ export function ownVehicleSourceForContext(context = {}) {
 export function dispatchSlotForContext(context = {}) {
   const hour = Number(context.dispatchPriority);
   if (!Number.isInteger(hour) || hour <= 0) return null;
-  if (hour < 7) return 'early';
-  if (hour <= 11) return 'morning';
-  if (hour <= 16) return 'afternoon';
+  if (hour < 8) return 'early';
+  if (hour >= 9 && hour <= 10) return 'morning';
+  if (hour >= 13 && hour <= 16) return 'afternoon';
   return null;
 }
 
@@ -251,9 +257,12 @@ export function summarizeOwnDispatch(orders = []) {
     if (!source) continue;
     if (source === 'registration-text') registrationTextMatches += 1;
     const slotId = dispatchSlotForContext(context);
-    const ready = Boolean(order.documents?.packingSlip && order.documents?.attachment)
+    const cashInvoiceRequired = requiresCashInvoice(context);
+    const printed = Boolean(order.documents?.packingSlip?.printStatus === 'printed'
+      && order.documents?.attachment?.printStatus === 'printed');
+    const ready = !cashInvoiceRequired && !printed && Boolean(order.documents?.packingSlip && order.documents?.attachment)
       && !Boolean(order.packingBlocked || context.packingBlocked);
-    const item = { order, ready, matchSource: source };
+    const item = { order, ready, printed, cashInvoiceRequired, matchSource: source };
     if (!slotId) {
       unassigned.push(item);
       continue;
@@ -291,19 +300,23 @@ export function summarizeChainPanels(orders = []) {
     const panel = panels[id];
     const slip = order.documents?.packingSlip;
     const attachment = order.documents?.attachment;
-    const printed = Boolean(slip && attachment && slip.printStatus === 'printed' && attachment.printStatus === 'printed');
-    const ready = Boolean(slip && attachment) && !Boolean(order.packingBlocked || context.packingBlocked);
+    const cashInvoiceRequired = requiresCashInvoice(context);
+    const printed = !cashInvoiceRequired && Boolean(slip && attachment && slip.printStatus === 'printed' && attachment.printStatus === 'printed');
+    const ready = !cashInvoiceRequired && Boolean(slip && attachment) && !Boolean(order.packingBlocked || context.packingBlocked);
     const transport = ownVehicleSourceForContext(context)
       ? 'own'
       : Number(context.distributorNo || 0) > 0 || context.freightRequired
         ? 'remote'
         : 'unclassified';
+    // Own-car slips are already in Tidig/FM/EM. Unknown transport must not be
+    // silently treated as remote freight or offered to the chain print action.
+    if (transport !== 'remote') continue;
     panel.total += 1;
     if (printed) panel.printed += 1;
     else panel.waiting += 1;
     panel[transport].total += 1;
     if (printed) panel[transport].printed += 1;
-    panel.orders.push({ order, printed, ready, transport });
+    panel.orders.push({ order, printed, ready, cashInvoiceRequired, transport });
   }
 
   for (const panel of Object.values(panels)) {
@@ -350,7 +363,9 @@ export function planDashboardPrintSelection(orders = [], kind, panelId, orderNum
   for (const item of selectedItems) {
     const { order, ready } = item;
     const documents = [order.documents?.packingSlip, order.documents?.attachment];
-    if (!ready || documents.some((document) => !document)) {
+    if (requiresCashInvoice(order.context)) {
+      errors.push(`Order ${order.orderNumber} requires Visma invoice form 365; packing slips are blocked.`);
+    } else if (!ready || documents.some((document) => !document)) {
       errors.push(`Order ${order.orderNumber} is not ready with both required documents.`);
     } else if (documents.every((document) => document.printStatus === 'printed')) {
       errors.push(`Order ${order.orderNumber} is already printed.`);

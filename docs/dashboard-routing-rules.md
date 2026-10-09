@@ -66,8 +66,9 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
 - `Ord.DelMt = 6`: kundhämtning (grön märkning).
 - `Ord.DelMt = 16`: budbil (lila märkning).
 - `Ord.DelMt = 42–46`: taxi (lila märkning).
-- Kundhämtning med `Actor.CPmtTrm = 1` får dessutom gul märkning för
-  Swish-betalning. Ingen Swish-slutsats görs för bud/taxi.
+- Kundhämtning med **orderns** `Ord.PmtTrm = 1` får dessutom gul märkning för
+  Swish-betalning. `Actor.CPmtTrm` styr inte märkningen; ingen Swish-slutsats
+  görs för bud/taxi.
 - Personalorder är en särskild grupp inom kundhämtning: `Actor.R12 = 60`
   och `Ord.DelMt = 6`. Rutan visar en egen fjärde rad och räknar dessa separat
   från övriga kundhämtningar utan att dubbelräkna totalen.
@@ -77,8 +78,17 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
 
 ### Tillkommande krav inför utskrift
 
-- När Swish-utskrift byggs ska den använda **fakturamall**, inte plocksedel.
-  Dagens läsvy markerar bara betalningsvillkor och startar ingen utskrift.
+- Kontantregeln gäller **alla order oavsett körsätt**, inte bara kundhämtningar.
+  Använd orderns `Ord.PmtTrm`, inte kundkortets `Actor.CPmtTrm`. För en sådan
+  order ska följesedel ersättas av faktura på Visma standardformulär 365,
+  **Faktura B&N**, tillsammans med partibilaga. Bekräfta först att kod 1
+  verkligen är kontant i denna Visma-miljö och om fler koder omfattas.
+- Ordern är ännu inte fakturerad: Visma skapar fakturan när fakturautskriften
+  godkänns. Därför räcker det inte att Printward väljer en annan befintlig
+  PDF. Ett godkänt Visma-flöde behövs för skapande/godkännande, hämtning av
+  rätt faktura-PDF, skydd mot dubbletter och kontroll av faktiskt resultat.
+  Tills det finns spärrar lokal kod vanlig följesedelsutskrift för identifierade
+  kontantorder. Ingen fakturering eller fysisk utskrift sker genom denna regel.
 - Kontrollera `Actor.R12` och minst en faktisk personalorder mot Visma innan
   personalgruppens data används i drift.
 
@@ -89,9 +99,9 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
   följesedel och partibilaga har dokumentstatus `printed`. Saknade, ändrade
   och ännu ej utskrivna dokument räknas som kvar. Siffran är inte samma sak
   som att dokumenten finns tillgängliga för utskrift.
-- Egna bilar identifieras med samma preliminära regel som Tidig/FM/EM.
-  Extern leverantör blir fjärrgods; okänt körsätt markeras separat i stället
-  för att antas vara fjärrgods.
+- Endast fjärrgods ingår i kedjekorten och deras utskriftsurval. Egna bilar
+  ligger under vanliga Tidig/FM/EM-följesedlar. Okänt körsätt antas inte vara
+  fjärrgods och tas inte med i kedjornas utskrift.
 - Övriga kunder får tills vidare ingen kvot. Där krävs en verifierad tolkning
   av `Actor.DocSmt`, så att endast kunder med krav på fysisk följesedel tas med.
 - Ingen utskrift är kopplad till kedjekorten ännu. Kontrollera verkliga
@@ -100,15 +110,18 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
 
 ## Egna bilar – Tidig, FM, EM (preliminär läsvy)
 
-- **Orderns** `Ord.DelPri`, inte kundkortets, avgör tid: före 07 = Tidig,
-  07–11 = FM och 12–16 = EM. Saknad/annan tid hamnar inte i en snabbgrupp.
+- **Orderns** `Ord.DelPri`, inte kundkortets, avgör tid: före 08 = Tidig,
+  09–10 = FM och 13–16 = EM. Klockan 08, 11 och 12 samt saknad/annan tid
+  hamnar inte i en snabbgrupp och markeras i översiktens upplysning.
 - Bekräftade egna bilars `Ord.DelMt`: `1–5`, `7–15`, `27` och `41`.
 - När Pindeliver ersätter `DelMt` med ett regnummer matchas tills vidare en
   regnummerform i leveranssättets text, till exempel `UDG 62J` eller
   `302. RJA 13M`. Detta är en **preliminär läsregel**, inte en verifierad
   utskriftsregel. Externa leverantörsorder utesluts först.
-- Klar betyder att både följesedel och partibilaga finns och att inget plock
-  återstår. Sortering i listan sker på `DelPri`, sedan körsätt, sedan ordernummer.
+- Klar för utskrift betyder att både följesedel och partibilaga finns, att
+  inget plock återstår och att de inte båda redan är utskrivna. Den gröna
+  siffran är sådana order; totalen inkluderar också utskrivna. Sortering i
+  listan sker på `DelPri`, sedan körsätt, sedan ordernummer.
 - Kontrollera verkliga `Txt`-värden och en order efter Pindeliver mot Visma
   innan snabb- eller massutskrift aktiveras. Alla order är fortsatt åtkomliga i
   vanliga orderfliken även om snabbgrupperingen inte känner igen ett körsätt.

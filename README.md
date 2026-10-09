@@ -76,19 +76,43 @@ The Returer panel is also read-only and uses
 `DelPri`; missing times remain unassigned. Cancelled orders are excluded.
 Returns are kept out of the regular order and pickup dashboards. This revised
 rule was locally tested and matched two visible Visma returns for 2026-09-24
-in the separate private, read-only live dashboard. Return printing remains
-disabled.
+in the separate private, read-only live dashboard. Visma's return document is
+Orderbekräftelser form 220 (Retursedel); a manual one-order export opened a
+one-page PDF inside the remote Visma session, but Printward has no verified
+automated source for it. Return printing remains disabled and, when enabled,
+must not staple these documents.
 `GET /api/pickups?deliveryDate=YYYY-MM-DD` reads customer pickups (`DelMt=6`),
-couriers (`16`), and taxis (`42`–`46`). Only a customer pickup whose
-`Actor.CPmtTrm=1` gets the Swish badge. The Tidig/FM/EM follow-slip cards use
+couriers (`16`), and taxis (`42`–`46`). A customer pickup whose **order**
+`Ord.PmtTrm=1` gets the Swish badge; the customer's `Actor.CPmtTrm` does not
+override it. The proposed cash-payment rule applies to **every order**, not
+just pickups: the order-level payment term selects Visma invoice form 365
+(Faktura B&N) plus partibilaga instead of följesedel plus partibilaga.
+For this release, Swish/cash-payment invoices remain in the existing manual
+Visma print routine; Printward must not print or invoice these orders.
+Visma creates the invoice when its invoice printout is approved; Printward
+cannot replace that with a pre-existing PDF or its local Print Agent. Code 1
+still needs confirmation against real cash orders, and the Visma invoice
+creation/approval and resulting PDF must be integrated and verified before
+cash orders can print from Printward. The local dashboard and server currently
+block their ordinary packing-slip path to avoid the wrong document.
+The virtual-printer controls, print-status note, and printer-settings button
+share the top filter row immediately after the distributor filter, leaving
+more vertical space for the order panels.
+The Tidig/FM/EM follow-slip cards use
 `GET /api/dashboard/dispatch?deliveryDate=YYYY-MM-DD`, grouped by the **order's**
 `DelPri` and confirmed own-car `DelMt` codes or a preliminary registration-text
-match. A card counts an order as ready only when its packing slip and attachment
-exist and packing is complete. These cards are also read-only. Sushi Yama
+match. Tidig is before 08:00, FM is 09:00–10:00, and EM is 13:00–16:00;
+orders at 08:00, 11:00, or 12:00 remain outside these quick cards and are
+reported in Alla order. The green count includes only unprinted orders whose
+packing slip and attachment exist and whose packing is complete; the dark count
+is the total including printed orders. The card count is labeled **klara för
+utskrift**, not printed. Sushi Yama
 (`Actor.R12=41`) and ChopChop (`Actor.R12=100`) use
 `GET /api/dashboard/chains?deliveryDate=YYYY-MM-DD` to show printed/total
-orders: both packing slip and attachment must have status `printed`. Their
-order lists remain read-only. The Other customers card waits for a verified
+**remote-freight** orders only: both packing slip and attachment must have
+status `printed`. Chain orders on own cars appear under the regular follow-slip
+cards, not twice. Unclassified transport is not silently treated as remote.
+The Other customers card waits for a verified
 `Actor.DocSmt` rule and shows no invented count. Personal orders are a separate
 fourth row within the pickup area (`Actor.R12=60`, `Ord.DelMt=6`). Esc closes
 read-only lookups and returns to the overview. In the default local
@@ -108,9 +132,14 @@ the existing planned print/simulation order remain unchanged.
 In each Tidig/FM/EM lookup, orders are now displayed in collapsible bundles by
 the order's `DelMt` (not the customer's default delivery method). A bundle shows
 ready/total counts; opening it shows every matching order and its document
-status. The top search accepts the delivery-method number or name as well as
-order/customer details. A search expands matching bundles automatically. This
-grouped display does not change readiness, selection rules, or print order.
+status. Each bundle has a **Skriv ut klara** action for only the unprinted,
+ready orders in that car (maximum 200 orders per job). Selectable rows in the
+own-car, freight, and chain lookups no longer open details on accidental clicks;
+**Visa order** does. Closing a detail returns to the same lookup with its
+selected checkboxes intact. The top search accepts the
+delivery-method number or name as well as order/customer details. A search
+expands matching bundles automatically. Server print eligibility and packet
+order remain authoritative.
 From the Printward overview, entering a search and pressing Enter opens a
 date-scoped, read-only **Sökresultat** lookup across all statuses in **Alla
 order**. It matches order/customer names, order numbers, booking numbers, route
@@ -151,8 +180,15 @@ orders with available freight documents and opening a read-only document-order
 review. `FreeInf1.Txt1` (chilled) and `Txt2` (frozen) appear on separate booking
 rows, while an order is selected and counted only once. Best Transport and
 Other carriers remain departure-only. The fictional mock order `900001` on
-`2026-06-24` demonstrates two bookings on one Kyl & Frys order. No freight
-selection starts printing or calls nShift.
+`2026-06-24` demonstrates two bookings on one Kyl & Frys order. Real print
+actions require the dashboard print flag and the local Print Agent; selection
+and read-only review themselves do not print or call nShift.
+Bulk selection and the quick action skip orders without a chilled/frozen
+booking number, leaving them visible with a clear warning. Other incomplete
+PDFs still fail the server's all-or-nothing preflight; they are never printed
+as partial packets. Selecting chilled or frozen separately is not enabled:
+printed status is currently tracked per document generation, not per booking,
+so partial output would falsely mark the other temperature printed.
 
 The review is checked again by `POST /api/dashboard/freight-plan` against the
 current date, carrier group, and document availability; it returns the sorted
@@ -178,12 +214,20 @@ If the PDF cannot identify which booking owns a label, preflight stops rather
 than guessing. The freight review shows the exact page sequence before printing.
 
 DSV Finland uses the same per-booking separation: fryst and kylt become distinct
-stapled sections within each order, with any labels in the source PDF first and
+stapled sections within each order, with a matching label first and
 four complete waybill copies after them. A DSV PDF that lacks one of the booked
-waybills is rejected in preview and printing instead of silently printing an
+labels or waybills is rejected in preview and printing instead of silently printing an
 incomplete packet. The current nShift `printWaybill` source may contain only
 waybills; Printward does not invent missing label pages. Existing freight PDFs
 must be checked for completeness before a physical DSV test.
+The isolated DSV label test can now check one order with either one booking or
+an exact chilled/frozen pair. Set `NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER`,
+`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBERS` (comma-separated exact numbers),
+`NSHIFT_ALLOWED_ORDER_NUMBERS` to that single order, and
+`NSHIFT_FORCE_REFRESH=true`. The previous singular
+`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER` remains supported. This is still an
+explicit, potentially stateful nShift test path, not a general automatic DSV
+sync setting; a no-call preview must keep `NSHIFT_FETCH_ENABLED=false`.
 
 In another terminal, start the local print agent:
 

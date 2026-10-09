@@ -569,14 +569,14 @@ function dsvFreightPrintSnapshots(order) {
     if (!freightPages.length) {
       throw new Error(`No verified DSV waybill pages for ${temperature.label} booking ${temperature.booking} on order ${order.orderNumber}.`);
     }
-    const documents = [];
-    if (labels.length) {
-      documents.push(documentForPrintSection(freight, {
-        typeLabel: `${temperature.label} labels`,
-        fileName: sectionFileName(freight, `${temperature.key}-labels`),
-        pages: orderedPageSelection(labels)
-      }));
+    if (!labels.length) {
+      throw new Error(`No verified DSV label pages for ${temperature.label} booking ${temperature.booking} on order ${order.orderNumber}.`);
     }
+    const documents = [documentForPrintSection(freight, {
+      typeLabel: `${temperature.label} labels`,
+      fileName: sectionFileName(freight, `${temperature.key}-labels`),
+      pages: orderedPageSelection(labels)
+    })];
     documents.push(documentForPrintSection(freight, {
       typeLabel: `${temperature.label} waybills`,
       fileName: sectionFileName(freight, `${temperature.key}-waybills`),

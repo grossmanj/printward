@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planDashboardPrintSelection, planFreightDocumentSelection, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
+import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
 
 test('dashboard print plan rejects wrong groups, unfinished slips, and already printed freight', () => {
   const slip = (printStatus = 'pending') => ({ name: 'slip.pdf', type: 'packingSlip', printStatus });
@@ -9,15 +9,45 @@ test('dashboard print plan rejects wrong groups, unfinished slips, and already p
   const orders = [
     { orderNumber: '101', context: { deliveryMethod: 1, distributorNo: 0, dispatchPriority: 6, customerChainNo: 41 }, documents: { packingSlip: slip(), attachment: attachment() } },
     { orderNumber: '102', context: { deliveryMethod: 1, distributorNo: 0, dispatchPriority: 6 }, packingBlocked: true, documents: { packingSlip: slip(), attachment: attachment() } },
-    { orderNumber: '103', context: { deliveryMethod: 47, distributorNo: 50063993, dispatchPriority: 7 }, documents: { freight: { name: 'freight.pdf', type: 'freight', printStatus: 'printed' } } }
+    { orderNumber: '103', context: { deliveryMethod: 47, distributorNo: 50063993, dispatchPriority: 7 }, documents: { freight: { name: 'freight.pdf', type: 'freight', printStatus: 'printed' } } },
+    { orderNumber: '104', context: { deliveryMethod: 25, distributorNo: 7331697, dispatchPriority: 9, customerChainNo: 41 }, documents: { packingSlip: slip(), attachment: attachment() } }
   ];
   assert.deepEqual(planDashboardPrintSelection(orders, 'dispatch', 'early', ['101']).orders.map((item) => item.orderNumber), ['101']);
   assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'morning', ['101']).valid, false);
   assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['102']).valid, false);
-  assert.equal(planDashboardPrintSelection(orders, 'chain', 'sushi-yama', ['101']).valid, true);
+  assert.equal(planDashboardPrintSelection(orders, 'chain', 'sushi-yama', ['101']).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'chain', 'sushi-yama', ['104']).valid, true);
   assert.equal(planDashboardPrintSelection(orders, 'freight', 'dsv-finland', ['103']).valid, false);
   assert.equal(planDashboardPrintSelection(orders, 'freight', 'best-transport', ['103']).valid, false);
   assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['101', '101']).valid, false);
+});
+
+test('cash payment on the order blocks slip packets for own cars and chains regardless of customer default', () => {
+  const cash = {
+    orderNumber: '201',
+    context: { deliveryMethod: 7, dispatchPriority: 9, customerChainNo: 41, orderPaymentTerm: 1, customerPaymentTerm: 2 },
+    documents: {
+      packingSlip: { printStatus: 'printed' },
+      attachment: { printStatus: 'printed' }
+    }
+  };
+  const credit = {
+    orderNumber: '202',
+    context: { deliveryMethod: 7, dispatchPriority: 9, customerChainNo: 41, orderPaymentTerm: 2, customerPaymentTerm: 1 },
+    documents: {
+      packingSlip: { printStatus: 'pending' },
+      attachment: { printStatus: 'pending' }
+    }
+  };
+  const remoteCash = { ...cash, orderNumber: '203', context: { ...cash.context, deliveryMethod: 25, distributorNo: 7331697 } };
+  assert.equal(requiresCashInvoice(cash.context), true);
+  assert.equal(requiresCashInvoice(credit.context), false);
+  assert.equal(summarizeOwnDispatch([cash, credit]).slots.morning.ready, 1);
+  assert.equal(summarizeChainPanels([cash, credit])['sushi-yama'].printed, 0);
+  assert.equal(summarizeChainPanels([cash, credit, remoteCash])['sushi-yama'].orders[0].cashInvoiceRequired, true);
+  assert.match(planDashboardPrintSelection([cash, credit], 'dispatch', 'morning', ['201']).errors[0], /requires Visma invoice/);
+  assert.match(planDashboardPrintSelection([cash, credit, remoteCash], 'chain', 'sushi-yama', ['203']).errors[0], /requires Visma invoice/);
+  assert.equal(planDashboardPrintSelection([cash, credit], 'dispatch', 'morning', ['202']).valid, true);
 });
 
 test('places routes 25 and 49 in Eriksson before the Kyl & Frys supplier rule', () => {
@@ -143,21 +173,23 @@ test('returns follow Gr3 regardless of delivery method and respect the 12:00 aft
 
 test('pickup summary separates customer, courier and taxi and marks only customer Swish', () => {
   const { pickups, summary } = summarizePickups([
-    { orderNumber: '2', deliveryMethod: 16, customerPaymentTerm: 1, dispatchPriority: 12 },
-    { orderNumber: '1', deliveryMethod: 6, customerPaymentTerm: 1, dispatchPriority: 7 },
-    { orderNumber: '3', deliveryMethod: 44, customerPaymentTerm: 2, dispatchPriority: 13 },
-    { orderNumber: '4', deliveryMethod: 151, customerPaymentTerm: 1, dispatchPriority: 11 }
+    { orderNumber: '2', deliveryMethod: 16, orderPaymentTerm: 1, dispatchPriority: 12 },
+    { orderNumber: '1', deliveryMethod: 6, orderPaymentTerm: 1, customerPaymentTerm: 2, dispatchPriority: 7 },
+    { orderNumber: '3', deliveryMethod: 44, orderPaymentTerm: 2, dispatchPriority: 13 },
+    { orderNumber: '4', deliveryMethod: 151, orderPaymentTerm: 1, dispatchPriority: 11 },
+    { orderNumber: '5', deliveryMethod: 6, orderPaymentTerm: 2, customerPaymentTerm: 1, dispatchPriority: 14 }
   ]);
-  assert.deepEqual(pickups.map((context) => context.orderNumber), ['1', '2', '3']);
-  assert.deepEqual(summary, { total: 3, customer: 1, staff: 0, courier: 1, taxi: 1, swish: 1 });
+  assert.deepEqual(pickups.map((context) => context.orderNumber), ['1', '2', '3', '5']);
+  assert.deepEqual(summary, { total: 4, customer: 2, staff: 0, courier: 1, taxi: 1, swish: 1 });
   assert.equal(pickups[0].swishPayment, true);
   assert.equal(pickups[1].swishPayment, false);
+  assert.equal(pickups[3].swishPayment, false);
   assert.equal(pickupKindForContext({ deliveryMethod: 46 }), 'taxi');
 });
 
 test('personal orders are identified within customer pickups without double counting', () => {
   const { pickups, summary } = summarizePickups([
-    { orderNumber: '1', deliveryMethod: 6, customerChainNo: 60, customerPaymentTerm: 1 },
+    { orderNumber: '1', deliveryMethod: 6, customerChainNo: 60, orderPaymentTerm: 1 },
     { orderNumber: '2', deliveryMethod: 6, customerChainNo: 41 },
     { orderNumber: '3', deliveryMethod: 16, customerChainNo: 60 },
     { orderNumber: '4', deliveryMethod: 44, customerChainNo: 60 }
@@ -183,10 +215,10 @@ test('own-car matching accepts confirmed methods and registration text without i
 test('own-car dispatch uses order priority, requires both paper documents, and keeps unknown times out of quick groups', () => {
   const availableDocs = { packingSlip: { printStatus: 'pending' }, attachment: { printStatus: 'pending' } };
   const { slots, unassignedCount, registrationTextMatches } = summarizeOwnDispatch([
-    { orderNumber: '4', context: { deliveryMethod: 302, deliveryMethodName: 'UDG 62J', dispatchPriority: 12 }, documents: availableDocs, packingBlocked: false },
+    { orderNumber: '4', context: { deliveryMethod: 302, deliveryMethodName: 'UDG 62J', dispatchPriority: 13 }, documents: availableDocs, packingBlocked: false },
     { orderNumber: '1', context: { deliveryMethod: 1, deliveryMethodName: 'Own route', dispatchPriority: 6 }, documents: availableDocs, packingBlocked: false },
-    { orderNumber: '2', context: { deliveryMethod: 7, deliveryMethodName: 'B route', dispatchPriority: 7 }, documents: { packingSlip: availableDocs.packingSlip }, packingBlocked: false },
-    { orderNumber: '3', context: { deliveryMethod: 8, deliveryMethodName: 'A route', dispatchPriority: 7 }, documents: availableDocs, packingBlocked: true },
+    { orderNumber: '2', context: { deliveryMethod: 7, deliveryMethodName: 'B route', dispatchPriority: 9 }, documents: { packingSlip: availableDocs.packingSlip }, packingBlocked: false },
+    { orderNumber: '3', context: { deliveryMethod: 8, deliveryMethodName: 'A route', dispatchPriority: 9 }, documents: availableDocs, packingBlocked: true },
     { orderNumber: '5', context: { deliveryMethod: 41, dispatchPriority: 0 }, documents: availableDocs, packingBlocked: false },
     { orderNumber: '6', context: { deliveryMethod: 6, dispatchPriority: 6 }, documents: availableDocs, packingBlocked: false },
     { orderNumber: '7', context: { deliveryMethod: 25, distributorNo: 7331697, dispatchPriority: 6 }, documents: availableDocs, packingBlocked: false }
@@ -197,12 +229,30 @@ test('own-car dispatch uses order priority, requires both paper documents, and k
   assert.deepEqual([slots.afternoon.total, slots.afternoon.ready], [1, 1]);
   assert.equal(unassignedCount, 1);
   assert.equal(registrationTextMatches, 1);
-  assert.equal(dispatchSlotForContext({ dispatchPriority: 11 }), 'morning');
-  assert.equal(dispatchSlotForContext({ dispatchPriority: 12 }), 'afternoon');
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 7 }), 'early');
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 8 }), null);
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 9 }), 'morning');
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 10 }), 'morning');
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 11 }), null);
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 12 }), null);
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 13 }), 'afternoon');
   assert.equal(dispatchSlotForContext({ dispatchPriority: 17 }), null);
 });
 
-test('chain cards count only fully printed slip-and-attachment bundles and preserve transport groups', () => {
+test('own-car ready count excludes fully printed packets but retains them in the total', () => {
+  const orders = [
+    { orderNumber: '1', context: { deliveryMethod: 7, dispatchPriority: 7 }, documents: { packingSlip: { printStatus: 'printed' }, attachment: { printStatus: 'printed' } } },
+    { orderNumber: '2', context: { deliveryMethod: 7, dispatchPriority: 7 }, documents: { packingSlip: { printStatus: 'printed' }, attachment: { printStatus: 'reprint' } } },
+    { orderNumber: '3', context: { deliveryMethod: 7, dispatchPriority: 7 }, documents: { packingSlip: { printStatus: 'pending' }, attachment: { printStatus: 'pending' } } }
+  ];
+  const early = summarizeOwnDispatch(orders).slots.early;
+  assert.equal(early.total, 3);
+  assert.equal(early.ready, 2);
+  assert.equal(early.orders[0].printed, true);
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['1']).valid, false);
+});
+
+test('chain cards include only remote freight and never duplicate own-car slips', () => {
   const printedDocs = {
     packingSlip: { printStatus: 'printed' },
     attachment: { printStatus: 'printed' }
@@ -214,14 +264,14 @@ test('chain cards count only fully printed slip-and-attachment bundles and prese
     { orderNumber: '4', context: { customerChainNo: 100, deliveryMethod: 302, deliveryMethodName: 'RJA 13M', dispatchPriority: 12 }, documents: { packingSlip: { printStatus: 'reprint' }, attachment: printedDocs.attachment } },
     { orderNumber: '5', context: { customerChainNo: 60, deliveryMethod: 6, dispatchPriority: 10 }, documents: printedDocs }
   ]);
-  assert.deepEqual(panels['sushi-yama'].orders.map(({ order }) => order.orderNumber), ['1', '3', '2']);
-  assert.equal(panels['sushi-yama'].total, 3);
-  assert.equal(panels['sushi-yama'].printed, 1);
-  assert.equal(panels['sushi-yama'].waiting, 2);
-  assert.deepEqual(panels['sushi-yama'].own, { total: 1, printed: 1 });
+  assert.deepEqual(panels['sushi-yama'].orders.map(({ order }) => order.orderNumber), ['2']);
+  assert.equal(panels['sushi-yama'].total, 1);
+  assert.equal(panels['sushi-yama'].printed, 0);
+  assert.equal(panels['sushi-yama'].waiting, 1);
+  assert.deepEqual(panels['sushi-yama'].own, { total: 0, printed: 0 });
   assert.deepEqual(panels['sushi-yama'].remote, { total: 1, printed: 0 });
-  assert.deepEqual(panels['sushi-yama'].unclassified, { total: 1, printed: 0 });
-  assert.equal(panels.chopchop.total, 1);
+  assert.deepEqual(panels['sushi-yama'].unclassified, { total: 0, printed: 0 });
+  assert.equal(panels.chopchop.total, 0);
   assert.equal(panels.chopchop.printed, 0);
-  assert.deepEqual(panels.chopchop.own, { total: 1, printed: 0 });
+  assert.deepEqual(panels.chopchop.own, { total: 0, printed: 0 });
 });

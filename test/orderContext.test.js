@@ -36,6 +36,7 @@ test('attaches missing order context safely', () => {
   assert.equal(orders[0].context.available, false);
   assert.equal(orders[0].context.orderNumber, '123');
   assert.equal(orders[0].context.distributorNo, 0);
+  assert.equal(orders[0].context.orderPaymentTerm, null);
   assert.equal(orders[0].context.customerPaymentTerm, null);
   assert.equal(orders[0].context.customerChainNo, null);
   assert.equal(orders[0].context.distributorName, '');
@@ -90,6 +91,7 @@ test('SQL order context filters sales transaction headers', async () => {
   assert.match(queries[1], /FROM Ord o[\s\S]*INNER JOIN @OrderNos f ON f\.OrdNo = o\.OrdNo[\s\S]*WHERE o\.TrTp = 1\s+AND \(ISNULL\(o\.OrdPrSt, 0\) & 536870912\) = 0\s+AND \(\(ISNULL\(o\.OrdPrSt, 0\) & 8\) = 8 OR \(ISNULL\(o\.OrdPrSt, 0\) & 8192\) = 8192\)\s+AND ISNULL\(o\.Gr3, 0\) <> 30 AND ISNULL\(o\.DelMt, 0\) NOT IN \(6, 40, 150, 151, 152\);/);
   assert.match(queries[1], /ISNULL\(NULLIF\(o\.Nm, ''\), ISNULL\(customer\.Nm, ''\)\) AS CustomerName/);
   assert.match(queries[1], /ISNULL\(customer\.CPmtTrm, 0\) AS CustomerPaymentTerm/);
+  assert.match(queries[1], /ISNULL\(o\.PmtTrm, 0\) AS OrderPaymentTerm/);
   assert.match(queries[1], /ISNULL\(customer\.R12, 0\) AS CustomerChainNo/);
   assert.match(queries[1], /SELECT TOP 1 a\.Nm, a\.CPmtTrm, a\.R12\s+FROM Actor a\s+WHERE a\.CustNo = o\.CustNo/);
   assert.match(queries[1], /ISNULL\(o\.SupNo, 0\) AS SupNo/);
@@ -218,6 +220,7 @@ test('SQL order context marks external distributors as freight-required', async 
                 Nm: 'Customer AB',
                 CustomerName: 'Customer AB',
                 CustomerPaymentTerm: 1,
+                OrderPaymentTerm: 2,
                 CustomerChainNo: 60,
                 SupNo: 789,
                 DistributorName: 'Kyl- och Frysexpressen Mälardalen AB',
@@ -251,6 +254,7 @@ test('SQL order context marks external distributors as freight-required', async 
 
   assert.equal(context.distributorNo, 789);
   assert.equal(context.customerPaymentTerm, 1);
+  assert.equal(context.orderPaymentTerm, 2);
   assert.equal(context.customerChainNo, 60);
   assert.equal(context.distributorName, 'Kyl- och Frysexpressen Mälardalen AB');
   assert.equal(context.routeGroup, 25);

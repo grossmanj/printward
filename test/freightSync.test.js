@@ -40,6 +40,39 @@ test('one-order DSV label test uploads only a verified label-first packet', asyn
   assert.deepEqual(analysis.coolingFreightPages, [2]);
 });
 
+test('two-booking DSV label test retains distinct chilled and frozen documents', async () => {
+  const calls = [];
+  let uploadedBody;
+  const chilled = '1990353_Chilled';
+  const frozen = '1990353_Froozen';
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'demo-bucket', outputPrefix: 'freight/demo/',
+    dryRun: false, forceRefresh: true, allowAll: false,
+    allowedOrderNumbers: ['1990353'], dsvLabelTestOrderNumber: '1990353',
+    dsvLabelTestConsignmentNumbers: [chilled, frozen], syncLimit: 1
+  } }, {
+    shipments: [{ orderNumber: '1990353', deliveryMethod: 47, supplierNo: 50063993,
+      consignments: [{ kind: 'fresh', consignmentNo: chilled }, { kind: 'frozen', consignmentNo: frozen }] }],
+    storage: { async uploadObjectIfChanged(_name, body) { uploadedBody = body; return { uploaded: true }; } },
+    nshiftClient: { async printDocuments(numbers, options) {
+      calls.push({ numbers, options });
+      const word = options.printType === 1 ? 'ETIKETT' : 'FRAKTSEDEL';
+      return [{ type: options.printType || 2, name: `${word}.pdf`, contentType: 'application/pdf',
+        body: createPlaceholderPdf(`${word} ${numbers[0]}`) }];
+    } }
+  });
+  assert.equal(result.uploaded, 1);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls.map(({ numbers }) => numbers[0]), [chilled, chilled, frozen, frozen]);
+  const analysis = await analyzeFreightBookingPdf(uploadedBody, {
+    freightConsignmentFresh: chilled, freightConsignmentFrozen: frozen
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.coolingFreightPages, [2]);
+  assert.deepEqual(analysis.frozenLabelPages, [3]);
+  assert.deepEqual(analysis.frozenFreightPages, [4]);
+});
+
 test('DSV label test refuses to upload when nShift returns no label', async () => {
   let uploads = 0;
   const result = await syncFreightDocuments({ nshift: {
@@ -67,7 +100,7 @@ test('DSV label test rejects a second booking before any nShift call', async () 
     shipments: [{ orderNumber: '1987847', deliveryMethod: 47,
       consignments: [{ kind: 'fresh', consignmentNo: 'DSV-1' }, { kind: 'frozen', consignmentNo: 'DSV-2' }] }],
     nshiftClient: { async printDocuments() { calls += 1; return []; } }
-  }), /exactly one allow-listed DSV order and matching booking/);
+  }), /exactly one allow-listed DSV order and its exact one or two bookings/);
   assert.equal(calls, 0);
 });
 

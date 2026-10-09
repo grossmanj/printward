@@ -30,7 +30,7 @@ import {
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore } from './stateStore.js';
-import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
+import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -1469,6 +1469,14 @@ async function handleApi(req, res, requestUrl, context) {
       .map((orderNumber) => byOrderNumber.get(orderNumber))
       .filter(Boolean);
     const printTypes = includeRequiredDocumentTypes(selectedTypes, selectedOrders);
+    const cashOrders = selectedOrders.filter((order) => requiresCashInvoice(order.context));
+    if (cashOrders.length > 0 && printTypes.some((type) => type === 'packingSlip' || type === 'attachment')) {
+      sendJson(res, 409, {
+        error: 'Cash-payment orders require a Visma invoice and attachment; packing-slip printing is blocked until invoice integration is verified.',
+        orderNumbers: cashOrders.map((order) => order.orderNumber)
+      });
+      return;
+    }
     const snapshots = await buildPrintSnapshots(storage, selectedOrders, printTypes, {
       includeComboSeparators: body.includeComboSeparators === true
     });

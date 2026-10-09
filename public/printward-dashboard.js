@@ -35,7 +35,6 @@ function followingDate(value) {
   return date.toISOString().slice(0, 10);
 }
 let activeView = 'printward';
-let suppressDialogCloseNavigation = false;
 let ordersRequest = 0;
 let activeFreightPanel = null;
 let freightPayload = null;
@@ -82,11 +81,23 @@ function pendingOrderDocuments(order, types, date = deliveryDate.value) {
 }
 
 function packetCandidates(order, date = deliveryDate.value) {
+  if (Number(order.context?.orderPaymentTerm) === 1) return [];
   const types = ['packingSlip', 'attachment'];
   if (!types.every((type) => order.documents?.[type])) return [];
   if (types.every((type) => order.documents[type].printStatus === 'printed')) return [];
   if (types.every((type) => simulated(order.orderNumber, type, date))) return [];
   return types.map((type) => ({ deliveryDate: date, orderNumber: String(order.orderNumber), type }));
+}
+
+function hasTemperatureBooking(order) {
+  return Boolean(String(order.context?.freightConsignmentFresh || '').trim()
+    || String(order.context?.freightConsignmentFrozen || '').trim());
+}
+
+function freightBulkCandidate(item) {
+  const { order, documentType, documentReady } = item;
+  return documentReady && hasTemperatureBooking(order)
+    && pendingOrderDocuments(order, [documentType]).length > 0;
 }
 
 function virtualPrintLabel(orderNumber, types, date = deliveryDate.value) {
@@ -304,9 +315,9 @@ function updateSimulationStatus() {
   simulationToggle.textContent = simulationEnabled ? 'Stoppa testläge' : 'Starta virtuell skrivare';
   simulationToggle.setAttribute('aria-pressed', String(simulationEnabled));
   simulationStatus.textContent = simulationEnabled
-    ? `${orders.size} order · ${items.length} ${items.length === 1 ? 'dokument simulerat' : 'dokument simulerade'} i denna webbläsare. Riktiga statusar är oförändrade.`
-    : realPrintingEnabled ? 'Riktiga utskrifter är aktiva för verifierade dokument. Print Agent måste vara igång på denna dator.'
-      : 'Testläget är avstängt. Riktiga utskrifter är spärrade i den här vyn.';
+    ? `${orders.size} order · ${items.length} ${items.length === 1 ? 'dokument simulerat' : 'dokument simulerade'} · riktig status oförändrad.`
+    : realPrintingEnabled ? 'Riktig utskrift aktiv · lokal Print Agent krävs.'
+      : 'Testläge av · riktiga utskrifter spärrade.';
   document.querySelector('#detailsPrintNote').textContent = simulationEnabled
     ? 'Virtuellt testläge: ingen riktig utskrift eller statusändring.'
     : realPrintingEnabled ? 'DEMO: Skriv ut order skickar verkliga dokument till den här datorns Print Agent.'
@@ -373,7 +384,6 @@ function closeLookup() {
 }
 function restoreLookup(snapshot) {
   if (dialog.open) {
-    suppressDialogCloseNavigation = true;
     dialog.close();
   }
   const views = new Set([...Object.keys(statuses), 'dispatch', 'freight', 'chains', 'returns', 'pickups', 'staff']);
@@ -437,7 +447,8 @@ function renderFreightCards(payload) {
       badge.title = `${panel?.waiting ?? 0} order saknar fraktdokument`;
     }
     const candidates = available && panel?.documentTracking
-      ? panel.orders.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType].filter(Boolean))) : [];
+      ? panel.orders.filter(freightBulkCandidate)
+        .flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType])) : [];
     const simulatedCount = panel?.orders.filter(({ order, documentType }) => documentType && simulated(order.orderNumber, documentType)).length || 0;
     setVirtualCount(card, simulatedCount);
     if (panel?.documentTracking) setVirtualQuick(card, `${freightNames[card.dataset.freightPanel]} · klara avgångar`, candidates,
@@ -464,19 +475,19 @@ function renderFreightList() {
       context.freightConsignmentFrozen, ...(context.freightConsignmentNumbers || [])]
       .filter(Boolean).join(' ').toLowerCase().includes(query);
   }), lookupSort);
-  const selectableVisible = visibleItems.filter(({ order, documentType, documentReady }) => documentReady
-    && pendingOrderDocuments(order, [documentType]).length);
-  const selectedItems = panel.orders.filter(({ order, documentType, documentReady }) => documentReady
-    && pendingOrderDocuments(order, [documentType]).length && selectedFreightOrders.has(String(order.orderNumber)));
+  const selectableVisible = visibleItems.filter(freightBulkCandidate);
+  const selectedItems = panel.orders.filter((item) => freightBulkCandidate(item)
+    && selectedFreightOrders.has(String(item.order.orderNumber)));
   const rows = visibleItems.flatMap(({ order, documentType, documentReady, printStatus, bookings }) => {
     const context = order.context || {};
     const virtualStatus = documentType && simulated(order.orderNumber, documentType);
-    const selectable = documentReady && pendingOrderDocuments(order, [documentType]).length > 0;
+    const selectable = freightBulkCandidate({ order, documentType, documentReady });
     const status = panel.documentTracking
-      ? documentReady ? virtualStatus ? 'Simulerat utskriven · riktig status oförändrad' : `Dokument finns · ${statusLabel(printStatus)}` : 'Fraktdokument saknas'
+      ? !hasTemperatureBooking(order) ? 'Bokningsnummer saknas · kvar i listan'
+        : documentReady ? virtualStatus ? 'Simulerat utskriven · riktig status oförändrad' : `Dokument finns · ${statusLabel(printStatus)}` : 'Fraktdokument saknas'
       : 'Avgång visas · ingen utskrift här';
     const bookingRows = bookings?.length ? bookings : [{ kind: '–', number: '–' }];
-    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Dokument saknas eller är redan utskrivet/simulerat"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td>`}</tr>`);
+    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Bokningsnummer eller dokument saknas, eller ordern är redan utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : !hasTemperatureBooking(order) ? 'missing' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
   }).join('');
   const name = freightNames[activeFreightPanel];
   const bookingCount = panel.orders.reduce((sum, item) => sum + (item.bookings?.length || 0), 0);
@@ -505,12 +516,12 @@ function renderFreightList() {
     return `<li><strong>Order ${escapeHtml(section.orderNumber)} · ${label}</strong><small>${pages}${copies}</small></li>`;
   }).join('');
   const selection = panel.documentTracking
-    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla med dokument i listan</label><span>${selectedItems.length} valda av ${panel.ready} med dokument</span><button id="reviewFreightSelection" type="button" ${selectedItems.length && !activeRealPrint ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
+    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla utskriftsbara i listan</label><span>${selectedItems.length} valda · order utan bokningsnummer ligger kvar men hoppas över</span><button id="reviewFreightSelection" type="button" ${selectedItems.length && !activeRealPrint ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
     : '';
   const review = panel.documentTracking && freightReviewOpen && selectedItems.length
     ? `<section class="dispatch-review freight-review" aria-label="Granskning av fraktdokument"><h2>Valda fraktdokument · ${selectedItems.length} order</h2><p>Servern kontrollerar grupp, PDF-sidor och ordning mot aktuell data. Kylt och fryst visas som egna bokningsrader men väljs per order. Inga följesedlar ingår och ingen utskrift startas.</p>${freightReviewPending ? '<p>Kontrollerar PDF-sidor…</p>' : freightPlanError ? `<p class="freight-plan-error">${escapeHtml(freightPlanError)}</p>` : `<ol>${reviewRows}</ol><h3>Verifierad sidordning</h3><ol>${reviewSections}</ol>`}</section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${name}</h1><p>${overview} Klicka på en order för detaljer.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr>${panel.documentTracking ? '<th>Välj</th>' : ''}<th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Bokningsnummer</th><th>Fraktdokument</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order i denna grupp för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${name}</h1><p>${overview} Använd Visa order för detaljer.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr>${panel.documentTracking ? '<th>Välj</th>' : ''}<th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Bokningsnummer</th><th>Fraktdokument</th><th>Detaljer</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order i denna grupp för valt datum och sökning.</div>'}${review}`;
   if (panel.documentTracking) {
     ordersView.querySelector('.print-selected').addEventListener('click', () => {
       const items = selectedItems.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType]));
@@ -564,8 +575,8 @@ function renderFreightList() {
       });
     });
   }
-  ordersView.querySelectorAll('[data-order]').forEach((row) => row.addEventListener('click', () => {
-    const item = panel.orders.find(({ order }) => String(order.orderNumber) === row.dataset.order);
+  ordersView.querySelectorAll('[data-show-freight-order]').forEach((button) => button.addEventListener('click', () => {
+    const item = panel.orders.find(({ order }) => String(order.orderNumber) === button.dataset.showFreightOrder);
     if (item) openOrderDetails(item.order);
   }));
 }
@@ -616,7 +627,7 @@ function renderDispatchCards(payload) {
   const notes = [];
   if (!available) notes.push('Orderkälla saknas – egna bilars avgångar kan inte visas.');
   else {
-    if (payload.unassignedCount) notes.push(`${payload.unassignedCount} egna bil-order utan giltig avgångstid finns i Alla order.`);
+    if (payload.unassignedCount) notes.push(`${payload.unassignedCount} egna bil-order utanför Tidig/FM/EM (t.ex. 08, 11 eller 12) finns i Alla order.`);
     if (payload.registrationTextMatches) notes.push(`${payload.registrationTextMatches} order matchades preliminärt via registreringsnumrets text.`);
   }
   caution.textContent = notes.join(' ');
@@ -639,20 +650,23 @@ function renderDispatchList() {
   const readyVisible = visibleItems.filter(({ order, ready }) => ready && packetCandidates(order).length);
   const selectedItems = slot.orders.filter(({ order, ready }) => ready && packetCandidates(order).length
     && selectedDispatchOrders.has(String(order.orderNumber)));
-  const orderRow = ({ order, ready, matchSource }) => {
+  const orderRow = ({ order, ready, printed, cashInvoiceRequired, matchSource }) => {
     const context = order.context || {};
     const missing = [!order.documents?.packingSlip && 'Följesedel', !order.documents?.attachment && 'Partibilaga'].filter(Boolean);
     const packingBlocked = order.packingBlocked || context.packingBlocked;
     const virtualStatus = virtualPrintLabel(order.orderNumber, ['packingSlip', 'attachment']);
     const selectable = ready && packetCandidates(order).length > 0;
-    const state = virtualStatus || (ready ? 'Klar för utskrift' : packingBlocked ? 'Pågående plock' : `Saknar ${missing.join(' och ') || 'dokument'}`);
-    return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Ordern är inte klar eller redan simulerad"'} ${selectable && selectedDispatchOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td>${escapeHtml(context.deliveryMethodName || context.deliveryMethod || '–')}${matchSource === 'registration-text' ? '<small class="freight-type">Regnr identifierat via text</small>' : ''}</td><td><span class="order-status ${virtualStatus ? 'simulated' : ready ? 'ready' : packingBlocked ? '' : 'missing'}">${escapeHtml(state)}</span></td></tr>`;
+    const state = cashInvoiceRequired ? 'Kontantorder · faktura i Visma krävs'
+      : virtualStatus || (printed ? 'Utskriven' : ready ? 'Klar för utskrift' : packingBlocked ? 'Pågående plock' : `Saknar ${missing.join(' och ') || 'dokument'}`);
+    return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Ordern är inte klar, redan utskriven eller simulerad"'} ${selectable && selectedDispatchOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td>${escapeHtml(context.deliveryMethodName || context.deliveryMethod || '–')}${matchSource === 'registration-text' ? '<small class="freight-type">Regnr identifierat via text</small>' : ''}</td><td><span class="order-status ${virtualStatus ? 'simulated' : ready || printed ? 'ready' : packingBlocked ? '' : 'missing'}">${escapeHtml(state)}</span></td><td><button class="show-dispatch-order" type="button" data-show-dispatch-order="${escapeHtml(order.orderNumber)}">Visa order</button></td></tr>`;
   };
   const bundles = groups.map((group, index) => {
     const expanded = dispatchGroupOpenOverrides.has(group.key)
       ? dispatchGroupOpenOverrides.get(group.key) : Boolean(query);
     const groupId = `dispatch-group-${index}`;
-    return `<section class="dispatch-group" aria-label="${escapeHtml(group.label)}"><button class="dispatch-group-toggle" type="button" data-dispatch-group="${escapeHtml(group.key)}" aria-expanded="${expanded}" aria-controls="${groupId}"><span><strong>${escapeHtml(group.label)}</strong><small>${group.items.length} order i bunten</small></span><span class="dispatch-group-count"><b>${group.ready} / ${group.items.length}</b> klara</span><span class="dispatch-group-chevron" aria-hidden="true">⌄</span></button><div class="dispatch-group-body" id="${groupId}" ${expanded ? '' : 'hidden'}><table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Leveransprioritet</th><th>Körsätt</th><th>Följesedlar</th></tr></thead><tbody>${group.items.map(orderRow).join('')}</tbody></table></div></section>`;
+    const printableCount = group.items.filter(({ order, ready }) => ready && packetCandidates(order).length).length;
+    const canPrintGroup = (simulationEnabled || realPrintingEnabled) && printableCount > 0 && printableCount <= 200 && !activeRealPrint;
+    return `<section class="dispatch-group" aria-label="${escapeHtml(group.label)}"><div class="dispatch-group-header"><button class="dispatch-group-toggle" type="button" data-dispatch-group="${escapeHtml(group.key)}" aria-expanded="${expanded}" aria-controls="${groupId}"><span><strong>${escapeHtml(group.label)}</strong><small>${group.items.length} order i bunten</small></span><span class="dispatch-group-count"><b>${group.ready} / ${group.items.length}</b> klara för utskrift</span><span class="dispatch-group-chevron" aria-hidden="true">⌄</span></button><button class="dispatch-group-print" type="button" data-print-dispatch-group="${escapeHtml(group.key)}" ${canPrintGroup ? '' : 'disabled'} title="${printableCount > 200 ? 'Max 200 order per jobb' : 'Skriv endast klara, ännu ej utskrivna order i denna bil'}">${simulationEnabled ? 'Simulera klara' : `Skriv ut klara (${printableCount})`}</button></div><div class="dispatch-group-body" id="${groupId}" ${expanded ? '' : 'hidden'}><table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Leveransprioritet</th><th>Körsätt</th><th>Följesedlar</th><th>Detaljer</th></tr></thead><tbody>${group.items.map(orderRow).join('')}</tbody></table></div></section>`;
   }).join('');
   const reviewRows = selectedItems.map(({ order, matchSource }) => {
     const context = order.context || {};
@@ -661,12 +675,21 @@ function renderDispatchList() {
   const review = dispatchReviewOpen && selectedItems.length
     ? `<section class="dispatch-review" aria-label="Granskning av vald bunt"><h2>Vald bunt · ${selectedItems.length} order</h2><p>Sorterad efter orderns DelPri och körsätt. Varje order består av följesedel + partibilaga. Detta är endast en granskning; ingen utskrift startas.</p><ol>${reviewRows}</ol></section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order har följesedel och partibilaga och är färdigplockade. Klicka på ett körsätt för att granska alla order i den bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order är klara för utskrift (gröna siffran); redan utskrivna räknas inte som klara. Klicka på ett körsätt för att granska alla order i bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara för utskrift</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
   ordersView.querySelectorAll('[data-dispatch-group]').forEach((button) => button.addEventListener('click', () => {
     const expanded = button.getAttribute('aria-expanded') !== 'true';
     dispatchGroupOpenOverrides.set(button.dataset.dispatchGroup, expanded);
     button.setAttribute('aria-expanded', String(expanded));
-    button.nextElementSibling.hidden = !expanded;
+    button.closest('.dispatch-group').querySelector('.dispatch-group-body').hidden = !expanded;
+  }));
+  ordersView.querySelectorAll('[data-print-dispatch-group]').forEach((button) => button.addEventListener('click', () => {
+    const group = groups.find((item) => item.key === button.dataset.printDispatchGroup);
+    if (!group) return;
+    const items = group.items.filter(({ order, ready }) => ready && packetCandidates(order).length)
+      .flatMap(({ order }) => packetCandidates(order));
+    if (simulationEnabled) openVirtualPrint(`${dispatchNames[activeDispatchSlot]} · ${group.label}`, items,
+      'Endast klara order i den här bilen. Följesedel och partibilaga häftas per order.');
+    else printDashboardItems('dispatch', activeDispatchSlot, `${dispatchNames[activeDispatchSlot]} · ${group.label}`, items);
   }));
   ordersView.querySelector('.print-selected').addEventListener('click', () => {
     const items = selectedItems.flatMap(({ order }) => packetCandidates(order));
@@ -696,8 +719,8 @@ function renderDispatchList() {
       renderDispatchList();
     });
   });
-  ordersView.querySelectorAll('[data-order]').forEach((row) => row.addEventListener('click', () => {
-    const item = slot.orders.find(({ order }) => String(order.orderNumber) === row.dataset.order);
+  ordersView.querySelectorAll('[data-show-dispatch-order]').forEach((button) => button.addEventListener('click', () => {
+    const item = slot.orders.find(({ order }) => String(order.orderNumber) === button.dataset.showDispatchOrder);
     if (item) openOrderDetails(item.order);
   }));
 }
@@ -741,26 +764,16 @@ function renderChainCards(payload) {
     const printed = card.querySelector('.chain-count em');
     const count = card.querySelector('.chain-count span');
     const badge = card.querySelector('strong i');
-    const unknown = card.querySelector('.chain-unknown');
     printed.textContent = available ? panel?.printed ?? 0 : '–';
     count.textContent = available ? panel?.total ?? 0 : '–';
     badge.textContent = available ? panel?.waiting ?? 0 : '';
     badge.hidden = !available || !panel?.waiting;
-    const ownTotal = panel?.own.total ?? 0;
     const remoteTotal = panel?.remote.total ?? 0;
     const remoteRemaining = remoteTotal - (panel?.remote.printed ?? 0);
-    card.querySelector('.chain-own').textContent = available
-      ? ownTotal ? `Egna bilar — ${panel.own.printed}/${ownTotal} utskrivna` : 'Egna bilar — inga order'
-      : 'Egna bilar — status saknas';
     card.querySelector('.chain-remote').textContent = available
       ? remoteTotal ? `Fjärrgods — ${remoteRemaining} kvar att skriva ut` : 'Fjärrgods — inga order'
       : 'Fjärrgods — status saknas';
-    card.querySelector('.done').classList.toggle('inactive', !available || ownTotal === 0);
     card.querySelector('.alert').classList.toggle('inactive', !available || remoteRemaining === 0);
-    unknown.hidden = !available || !panel?.unclassified.total;
-    unknown.textContent = panel?.unclassified.total
-      ? `${panel.unclassified.total} order med körsätt att kontrollera`
-      : '';
     const candidates = available ? (panel?.orders || []).filter((item) => item.ready && !item.printed)
       .flatMap(({ order }) => packetCandidates(order)) : [];
     const simulatedCount = (panel?.orders || []).filter(({ order }) => simulated(order.orderNumber, 'packingSlip')
@@ -791,25 +804,26 @@ function renderChainList() {
   const selectableVisible = visibleItems.filter(({ order, ready, printed }) => ready && !printed && packetCandidates(order).length);
   const selectedItems = panel.orders.filter(({ order, ready, printed }) => ready && !printed
     && packetCandidates(order).length && selectedChainOrders.has(String(order.orderNumber)));
-  const rows = visibleItems.map(({ order, printed, ready, transport }) => {
+  const rows = visibleItems.map(({ order, printed, ready, cashInvoiceRequired, transport }) => {
     const context = order.context || {};
     const missing = [!order.documents?.packingSlip && 'följesedel', !order.documents?.attachment && 'partibilaga'].filter(Boolean);
     const updated = [order.documents?.packingSlip, order.documents?.attachment]
       .some((document) => document?.printStatus === 'reprint');
     const virtualStatus = virtualPrintLabel(order.orderNumber, ['packingSlip', 'attachment']);
-    const state = virtualStatus || (printed ? 'Utskriven' : order.packingBlocked || context.packingBlocked
+    const state = cashInvoiceRequired ? 'Kontantorder · faktura i Visma krävs'
+      : virtualStatus || (printed ? 'Utskriven' : order.packingBlocked || context.packingBlocked
       ? 'Pågående plock'
       : missing.length ? `Saknar ${missing.join(' och ')}`
         : updated ? 'Uppdaterad – återutskrift behövs'
           : ready ? 'Behöver utskrift' : 'Inte klar');
     const selectable = ready && !printed && packetCandidates(order).length > 0;
-    return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-chain-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled'} ${selectable && selectedChainOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || '–')}</td><td>${escapeHtml(chainTransportNames[transport])}</td><td><span class="order-status ${virtualStatus ? 'simulated' : printed ? 'ready' : 'missing'}">${escapeHtml(state)}</span></td></tr>`;
+    return `<tr data-order="${escapeHtml(order.orderNumber)}"><td><input class="dispatch-select" type="checkbox" data-select-chain-order="${escapeHtml(order.orderNumber)}" aria-label="Markera order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled'} ${selectable && selectedChainOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td><td><strong>${escapeHtml(order.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || '–')}</td><td>${escapeHtml(chainTransportNames[transport])}</td><td><span class="order-status ${virtualStatus ? 'simulated' : printed ? 'ready' : 'missing'}">${escapeHtml(state)}</span></td><td><button class="show-dispatch-order" type="button" data-show-chain-order="${escapeHtml(order.orderNumber)}">Visa order</button></td></tr>`;
   }).join('');
   const selection = `<div class="dispatch-selection"><label><input id="selectAllChainReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedChainOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera klara som behöver utskrift</label><span>${selectedItems.length} valda</span><button id="reviewChainSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`;
   const review = chainReviewOpen && selectedItems.length
     ? `<section class="dispatch-review"><h2>Valda följesedlar · ${selectedItems.length} order</h2><p>Klicka på en orderrad för att granska följesedel och partibilaga som PDF. Ingen utskrift startas.</p><ol>${selectedItems.map(({ order }) => `<li><strong>Order ${escapeHtml(order.orderNumber)} · ${escapeHtml(order.context?.customerName || '–')}</strong><small>Följesedel: ${escapeHtml(statusLabel(order.documents?.packingSlip?.printStatus))} · Partibilaga: ${escapeHtml(statusLabel(order.documents?.attachment?.printStatus))}</small></li>`).join('')}</ol></section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${chainNames[activeChainPanel]}</h1><p>${panel.printed} av ${panel.total} order har både följesedel och partibilaga utskrivna. Röda siffran visar order som återstår. Okända körsätt markeras separat.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Transport</th><th>Dokumentstatus</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga kedjeorder för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${chainNames[activeChainPanel]} · fjärrgods</h1><p>${panel.printed} av ${panel.total} fjärrgodsorder har både följesedel och partibilaga utskrivna. Röda siffran visar order som återstår. Egna bilars order finns under vanliga följesedlar.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr><th>Välj</th><th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Transport</th><th>Dokumentstatus</th><th>Detaljer</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga kedjeorder för valt datum och sökning.</div>'}${review}`;
   ordersView.querySelector('.print-selected').addEventListener('click', () => {
     const items = selectedItems.flatMap(({ order }) => packetCandidates(order));
     if (simulationEnabled) openVirtualPrint(`${chainNames[activeChainPanel]} · valda följesedlar`, items,
@@ -838,8 +852,8 @@ function renderChainList() {
       renderChainList();
     });
   });
-  ordersView.querySelectorAll('[data-order]').forEach((row) => row.addEventListener('click', () => {
-    const item = panel.orders.find(({ order }) => String(order.orderNumber) === row.dataset.order);
+  ordersView.querySelectorAll('[data-show-chain-order]').forEach((button) => button.addEventListener('click', () => {
+    const item = panel.orders.find(({ order }) => String(order.orderNumber) === button.dataset.showChainOrder);
     if (item) openOrderDetails(item.order);
   }));
 }
@@ -1035,13 +1049,13 @@ function pickupCandidate(context) {
 function simulatePickup(context) {
   openVirtualPrint(`Hämtning/bud/taxi · order ${context.orderNumber}`, pickupCandidate(context),
     context.swishPayment
-      ? 'Swishorder ska använda fakturamall, men den mallen är inte verifierad här; endast utskriftssteget simuleras.'
+      ? 'Swish/kontant: fakturan skrivs tills vidare ut direkt från Visma. Printward simulerar bara detta steg.'
       : 'Dokumentmallen är inte verifierad; endast utskriftssteget simuleras.');
 }
 
 function openPickupDetails(context) {
   title.textContent = `Order ${context.orderNumber}`;
-  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Leveranssätt</dt><dd>${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || '–')} (${escapeHtml(context.deliveryMethod || '–')})</dd><dt>Tid enligt order</dt><dd>${escapeHtml(context.dispatchTime || 'Ej angiven')}</dd><dt>Betalning</dt><dd>${context.swishPayment ? 'Swish betalning vid hämtning' : 'Ingen Swish-markering'}</dd><dt>Teststatus</dt><dd>${simulated(context.orderNumber, 'pickup') ? 'Simulerat utskriven · inte på riktigt' : 'Ej simulerad'}</dd></dl><button class="quick-print" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
+  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Leveranssätt</dt><dd>${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || '–')} (${escapeHtml(context.deliveryMethod || '–')})</dd><dt>Tid enligt order</dt><dd>${escapeHtml(context.dispatchTime || 'Ej angiven')}</dd><dt>Betalning</dt><dd>${context.swishPayment ? 'Swish betalning vid hämtning' : 'Ingen Swish-markering'}</dd><dt>Utskrift</dt><dd>${context.swishPayment ? 'Faktura skrivs tills vidare direkt från Visma' : 'Dokumentmall ej verifierad'}</dd><dt>Teststatus</dt><dd>${simulated(context.orderNumber, 'pickup') ? 'Simulerat utskriven · inte på riktigt' : 'Ej simulerad'}</dd></dl><button class="quick-print" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
   detail.querySelector('.quick-print').addEventListener('click', () => { dialog.close(); simulatePickup(context); });
   dialog.showModal();
 }
@@ -1094,7 +1108,7 @@ function renderPickupList(payload, onlyStaff = false) {
   const rows = pickups.map((context) => `<tr data-pickup-order="${escapeHtml(context.orderNumber)}"><td><strong>${escapeHtml(context.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td><span class="pill ${context.staffOrder ? 'staff' : context.pickupKind === 'customer' ? 'pickup' : 'courier'}">${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || 'Okänt')}</span>${context.swishPayment ? ' <span class="pill swish">Swish betalning</span>' : ''}${simulated(context.orderNumber, 'pickup') ? ' <span class="pill virtual-pill">Simulerat utskriven</span>' : ''}</td><td><button class="quick-print" data-sim-pickup="${escapeHtml(context.orderNumber)}" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera' : 'Skriv ut'}</button></td></tr>`).join('');
   const heading = onlyStaff ? 'Personalorder' : 'Hämtningar, bud & taxi';
   const count = onlyStaff ? payload.summary?.staff ?? pickups.length : payload.summary?.total ?? pickups.length;
-  ordersView.innerHTML = `<header><div><h1>${heading}</h1><p>${count} order för valt datum. ${onlyStaff ? 'Personalorder är kundhämtningar med Actor.R12 = 60 och Ord.DelMt = 6.' : 'Swish-markeringen kommer från kundens Actor.CPmtTrm = 1.'}</p></div><span class="read-only">Endast läsning</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Tid</th><th>Hämtsätt och betalning</th><th>Utskrift</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order för valt datum och sökning.</div>'}`;
+  ordersView.innerHTML = `<header><div><h1>${heading}</h1><p>${count} order för valt datum. ${onlyStaff ? 'Personalorder är kundhämtningar med Actor.R12 = 60 och Ord.DelMt = 6.' : 'Swish-markeringen kommer från orderns Ord.PmtTrm = 1.'}</p></div><span class="read-only">Endast läsning</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Tid</th><th>Hämtsätt och betalning</th><th>Utskrift</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order för valt datum och sökning.</div>'}`;
   ordersView.querySelectorAll('[data-pickup-order]').forEach((row) => row.addEventListener('click', () => {
     const context = (payload.pickups || []).find((item) => String(item.orderNumber) === row.dataset.pickupOrder);
     if (context) openPickupDetails(context);
@@ -1190,10 +1204,6 @@ dashboardSort.addEventListener('change', (event) => {
   if (activeView === 'freight') renderFreightList();
   else if (activeView === 'dispatch') renderDispatchList();
   else if (activeView === 'chains') renderChainList();
-});
-dialog.addEventListener('close', () => {
-  if (suppressDialogCloseNavigation) suppressDialogCloseNavigation = false;
-  else closeLookup();
 });
 window.addEventListener('popstate', (event) => restoreLookup(event.state?.printwardLookup));
 document.addEventListener('keydown', (event) => {

@@ -5,6 +5,7 @@ import test from 'node:test';
 import { projectRoot } from '../src/config.js';
 import { planFreightDocumentSelection } from '../src/dashboardRules.js';
 import { MockGcsClient } from '../src/gcsClient.js';
+import { mergePdfBuffers } from '../src/freightSync.js';
 import { createPlaceholderPdf } from '../src/pdf.js';
 import { verifyFreightPacket } from '../src/server.js';
 
@@ -70,12 +71,16 @@ test('Eriksson uses the same PDF preflight and DSV verifies a freight-only PDF',
     missingTypes: [],
     documents: { freight: { name: 'freight400.pdf', source: 'primary', generation: '1', type: 'freight', fileName: 'freight400.pdf' } }
   };
-  const dsvStorage = { getObject: async () => ({ body: createPlaceholderPdf('FRAKTSEDEL DSV Finland DSV-400') }) };
+  const dsvBody = await mergePdfBuffers([
+    createPlaceholderPdf('ETIKETT DSV Finland DSV-400'),
+    createPlaceholderPdf('FRAKTSEDEL DSV Finland DSV-400')
+  ]);
+  const dsvStorage = { getObject: async () => ({ body: dsvBody }) };
   const dsvPlan = planFreightDocumentSelection([dsv], 'dsv-finland', ['400']);
   const dsvResult = await verifyFreightPacket(dsvStorage, [dsv], dsvPlan);
-  assert.equal(dsvResult.verifiedFiles[0].pageCount, 1);
+  assert.equal(dsvResult.verifiedFiles[0].pageCount, 2);
   assert.deepEqual(dsvResult.sections.map((section) => section.sectionType), ['cooling-dsv-packet']);
-  assert.deepEqual(dsvResult.sections[0].documents.map((document) => document.type), ['freight']);
+  assert.deepEqual(dsvResult.sections[0].documents.map((document) => document.type), ['freight', 'freight']);
 });
 
 test('DSV routes 47 and 48 verify in order with freight-only four-copy sections', async () => {
@@ -100,13 +105,14 @@ test('DSV routes 47 and 48 verify in order with freight-only four-copy sections'
   assert.deepEqual(plan.excludes, ['packingSlip', 'attachment']);
 
   const result = await verifyFreightPacket(storage, orders, plan);
-  assert.deepEqual(result.verifiedFiles.map((file) => file.pageCount), [1, 1]);
+  assert.deepEqual(result.verifiedFiles.map((file) => file.pageCount), [2, 2]);
   assert.deepEqual(result.sections.map((section) => section.orderNumber), ['900004', '900005']);
   assert.deepEqual(result.sections.map((section) => section.sectionType),
     ['cooling-dsv-packet', 'frozen-dsv-packet']);
-  assert.ok(result.sections.every((section) => section.documents.length === 1
+  assert.ok(result.sections.every((section) => section.documents.length === 2
     && section.documents[0].type === 'freight'
-    && section.documents[0].pageCopies === 4));
+    && section.documents[0].pageCopies === 1
+    && section.documents[1].pageCopies === 4));
 });
 
 test('DSV preflight refuses a PDF missing one of two booked waybills', async () => {

@@ -147,6 +147,37 @@ test('dashboard print endpoint requires an explicit feature flag and a fresh eli
   assert.equal(payload.job.notes, 'Dashboard dispatch: early (2026-06-25)');
 });
 
+test('cash-payment order cannot create a packing-slip job through dashboard or legacy printing', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-cash-order-test-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  const cashOrder = contexts.find((context) => context.orderNumber === '1001');
+  assert.ok(cashOrder);
+  cashOrder.orderPaymentTerm = 1;
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false',
+    PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    PRINTWARD_LEGACY_PRINT_ENABLED: 'true',
+    MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const dashboard = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'dispatch', panelId: 'early', deliveryDate: '2026-06-25', orderNumbers: ['1001'] })
+  });
+  assert.equal(dashboard.status, 409);
+  assert.match(JSON.stringify(await dashboard.json()), /requires Visma invoice/);
+
+  const legacy = await request(handler, '/api/print-jobs', {
+    method: 'POST',
+    body: JSON.stringify({ deliveryDate: '2026-06-25', orderNumbers: ['1001'], documentTypes: ['packingSlip', 'attachment'] })
+  });
+  assert.equal(legacy.status, 409);
+  assert.match((await legacy.json()).error, /Cash-payment orders require a Visma invoice/);
+});
+
 test('dashboard freight print job contains only verified Kyl sections', async (t) => {
   const handler = await createAuthHandler(t, {
     PRINTWARD_AUTH_ENABLED: 'false',
@@ -178,11 +209,11 @@ test('dashboard freight print job contains only verified Kyl sections', async (t
   assert.equal(dsv.status, 201);
   const dsvPayload = await dsv.json();
   assert.deepEqual(dsvPayload.manifest.orders[0].documents.map((document) => [document.type, document.pageCopies]), [
-    ['freight', 4]
+    ['freight', undefined], ['freight', 4]
   ]);
   assert.equal(dsvPayload.manifest.orders[0].sectionType, 'cooling-dsv-packet');
-  assert.equal(dsvPayload.manifest.orders[0].documents[0].copyMode, 'perDocument');
-  assert.match(dsvPayload.manifest.orders[0].documents[0].url, /copyMode=perDocument/);
+  assert.equal(dsvPayload.manifest.orders[0].documents[1].copyMode, 'perDocument');
+  assert.match(dsvPayload.manifest.orders[0].documents[1].url, /copyMode=perDocument/);
 });
 
 async function openEventStream(handler, pathOrUrl, options = {}) {

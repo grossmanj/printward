@@ -15,6 +15,14 @@ test('overview quick-print controls start disabled and require server print capa
   assert.match(script, /\/api\/dashboard\/print-jobs/);
 });
 
+test('print and agent controls share the filter row after distributor', () => {
+  const toolbar = html.match(/<section class="toolbar"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(toolbar);
+  assert.match(toolbar, /Distributör: Alla[\s\S]*class="simulation-toolbar"/);
+  assert.match(toolbar, /id="simulationToggle"[\s\S]*id="simulationStatus"[\s\S]*id="printerSettingsButton"/);
+  assert.equal((html.match(/class="simulation-toolbar"/g) || []).length, 1);
+});
+
 test('Windows dashboard printing rejects an old agent without spool confirmation', () => {
   assert.match(agent, /spoolConfirmation: true/);
   assert.match(script, /details\.platform === 'win32' && !details\.spoolConfirmation/);
@@ -59,7 +67,27 @@ test('follow-slip lookup has clickable method bundles and searchable route codes
   assert.match(script, /matchesDispatchSearch\(item, query\)/);
   assert.match(script, /data-dispatch-group=/);
   assert.match(script, /aria-expanded=/);
-  assert.match(script, /button\.nextElementSibling\.hidden = !expanded/);
+  assert.match(script, /querySelector\('\.dispatch-group-body'\)\.hidden = !expanded/);
+  assert.match(script, /data-print-dispatch-group=/);
+  assert.match(script, /data-show-dispatch-order=/);
+  assert.match(script, /data-show-freight-order=/);
+  assert.match(script, /data-show-chain-order=/);
+  assert.doesNotMatch(script, /dialog\.addEventListener\('close',[^]*closeLookup\(\)/);
+});
+
+test('freight bulk leaves orders without chilled/frozen booking visible but unselected', () => {
+  assert.match(script, /function hasTemperatureBooking\(order\)/);
+  assert.match(script, /const selectableVisible = visibleItems\.filter\(freightBulkCandidate\)/);
+  assert.match(script, /panel\.orders\.filter\(freightBulkCandidate\)/);
+  assert.match(script, /Bokningsnummer saknas · kvar i listan/);
+  assert.match(script, /Markera alla utskriftsbara i listan/);
+});
+
+test('own-car cards show Edmarks departure times and clarify ready versus total', () => {
+  assert.match(html, /<time>Före 08:00<\/time>/);
+  assert.match(html, /<time>09:00–10:00<\/time>/);
+  assert.match(html, /<time>13:00–16:00<\/time>/);
+  assert.match(script, /redan utskrivna räknas inte som klara/);
 });
 
 test('overview search opens an all-status, date-scoped lookup with city and route columns', () => {

@@ -111,6 +111,7 @@
     "generation": "9000041",
     "contentType": "application/pdf",
     "mockPages": [
+      "TEST ETIKETT DSV Finland rutt 47 TEST-DSV-KYLT-07",
       "TEST FRAKTSEDEL DSV Finland rutt 47 TEST-DSV-KYLT-07"
     ]
   },
@@ -121,6 +122,7 @@
     "generation": "9000051",
     "contentType": "application/pdf",
     "mockPages": [
+      "TEST ETIKETT DSV Finland rutt 48 TEST-DSV-FRYST-13",
       "TEST FRAKTSEDEL DSV Finland rutt 48 TEST-DSV-FRYST-13"
     ]
   }
