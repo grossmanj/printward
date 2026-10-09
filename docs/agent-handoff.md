@@ -1084,11 +1084,41 @@ are verification needs, not claims that the running system is broken.
   *printed* order shows the customer's normal route needs a concrete Visma
   order example with before/after values to identify where the assigned
   registration is stored. No alternate field was guessed or substituted.
-- Local Node test suite: 116 tests passed using the bundled Node CLI. No live
-  nShift call, physical print, Windows agent update, GitHub push, Cloud Run
-  deploy, or production change was made in this pass. The worktree also
-  contains pre-existing staged and unstaged changes; those were preserved.
+- Local Node test suite: 116 tests passed using the bundled Node CLI. At this
+  local review stage no live nShift call, physical print, Windows agent update,
+  GitHub push, Cloud Run deploy, or production change was made. The worktree
+  also contained pre-existing staged and unstaged changes; those were preserved.
   Browser QA used a temporary, local read-only mock on port 3111: on
   2026-06-25 a ready order remained selected after its **Visa order** dialog
   was closed; clicking the customer cell did not open that dialog. The local
-  server was stopped afterward. The real demo service has not been updated.
+  server was stopped afterward. The real demo service had not been updated at
+  that point; see the rollout below.
+
+### 2026-10-09 Edmark follow-up demo rollout
+
+- The reviewed behavior changes above, along with pending cash-order and DSV
+  safeguards, were committed on `demo` as
+  `2168bd64b11b02d96f6b376f60a5e2b0f5ad2f57`. The remote `demo` SHA was
+  verified after a normal push. `git diff --cached --check` was clean and the
+  local Node suite passed 116 tests before the push.
+- Before deploying, Cloud Run `printward-demo` was inspected in project
+  `visma-274514`, region `europe-north1`. It used the demo printing runtime
+  service account, Secret Manager references for SQL and login, SQL database
+  `F0002`, GCS prefix `2/`, freight prefix `freight/2/`, Datastore namespace
+  `printward_demo`, the existing Serverless VPC Access connector, app login,
+  dashboard printing enabled, legacy printing disabled, and nShift fetching
+  disabled. The image-only Cloud Build deploy command did not set or replace
+  those runtime values.
+- Trigger `printward-demo` launched Cloud Build
+  `0b7ee1bc-afb5-4bf2-9770-6b96fbc7019c` for that commit. `npm ci`,
+  `npm test`, image build/push, and `deploy-demo` all succeeded. Cloud Run
+  revision `printward-demo-00032-5d8` received 100% traffic. The login page
+  returned HTTP 200, unauthenticated `/api/health` correctly returned HTTP
+  401, and the authenticated dashboard loaded live order counts and the new
+  Tidig/FM/EM labels. This confirms service availability, not physical print.
+- No nShift call, physical print, Windows agent update, production deploy,
+  freight job change, or scheduler change was made during this rollout.
+  Finland label-first bundles, per-temperature printing/status, the assigned
+  registration display on printed orders, and the return worklist remain the
+  unresolved items noted above. A Monday operator test should record exact
+  order numbers and observed paper/status results before further changes.
