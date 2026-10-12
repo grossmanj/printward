@@ -263,7 +263,26 @@ function isDsvShipment(shipment) {
   return [47, 48].includes(Number(shipment.deliveryMethod)) || Number(shipment.supplierNo) === 50063993;
 }
 
-async function fetchDsvLabelTestPdf(nshift, shipment) {
+function dsvBookingContext(shipment) {
+  return {
+    freightConsignmentFresh: shipment.consignments.find((item) => item.kind === 'fresh')?.consignmentNo,
+    freightConsignmentFrozen: shipment.consignments.find((item) => item.kind === 'frozen')?.consignmentNo
+  };
+}
+
+async function verifyDsvPdf(body, shipment) {
+  try {
+    const analysis = await analyzeFreightBookingPdf(body, dsvBookingContext(shipment));
+    return !analysis.unknownPages.length && shipment.consignments.every((item) => {
+      const prefix = item.kind === 'frozen' ? 'frozen' : 'cooling';
+      return analysis[`${prefix}LabelPages`]?.length && analysis[`${prefix}FreightPages`]?.length;
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function fetchDsvLabelPdf(nshift, shipment) {
   const pages = [];
   for (const consignment of shipment.consignments) {
     const labelDocuments = filterPdfDocuments(await nshift.printDocuments([consignment.consignmentNo], {
@@ -282,14 +301,7 @@ async function fetchDsvLabelTestPdf(nshift, shipment) {
   }
 
   const body = await mergePdfBuffers(pages);
-  const analysis = await analyzeFreightBookingPdf(body, {
-    freightConsignmentFresh: shipment.consignments.find((item) => item.kind === 'fresh')?.consignmentNo,
-    freightConsignmentFrozen: shipment.consignments.find((item) => item.kind === 'frozen')?.consignmentNo
-  });
-  if (analysis.unknownPages.length || shipment.consignments.some((item) => {
-    const prefix = item.kind === 'frozen' ? 'frozen' : 'cooling';
-    return !analysis[`${prefix}LabelPages`]?.length || !analysis[`${prefix}FreightPages`]?.length;
-  })) {
+  if (!await verifyDsvPdf(body, shipment)) {
     throw new Error(`DSV label/waybill PDF could not be verified for order ${shipment.orderNumber}; no file was uploaded.`);
   }
   return body;
@@ -372,6 +384,13 @@ export async function syncFreightDocuments(config, overrides = {}) {
       if (!config.nshift.dryRun && !config.nshift.forceRefresh) {
         existingFreight = await getExistingObject(storage, objectName);
         existingPallet = palletObjectName ? await getExistingObject(storage, palletObjectName) : null;
+        if (existingFreight && isDsvShipment(shipment) && config.nshift.repairExistingDsv === true) {
+          if (typeof storage.getObject !== 'function') {
+            throw new Error('DSV repair requires reading the existing PDF before any nShift call.');
+          }
+          const existingPdf = await storage.getObject(objectName, 'freight', existingFreight.generation || '');
+          if (!await verifyDsvPdf(existingPdf.body, shipment)) existingFreight = null;
+        }
         if (existingFreight && (!palletRequired || existingPallet)) {
           results.push({
             ok: true,
@@ -402,8 +421,8 @@ export async function syncFreightDocuments(config, overrides = {}) {
         : null;
       let body = null;
       if (!existingFreight) {
-        if (shipment.orderNumber === dsvLabelTestOrderNumber && isDsvShipment(shipment)) {
-          body = await fetchDsvLabelTestPdf(nshift, shipment);
+        if (isDsvShipment(shipment)) {
+          body = await fetchDsvLabelPdf(nshift, shipment);
         } else {
           const documents = await nshift.printDocuments(consignmentNumbers);
           const pdfs = filterPdfDocuments(documents).map((document) => document.body);

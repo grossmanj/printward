@@ -1,8 +1,102 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { syncFreightDocuments } from '../src/freightSync.js';
+import { mergePdfBuffers, syncFreightDocuments } from '../src/freightSync.js';
 import { analyzeFreightBookingPdf, createPlaceholderPdf } from '../src/pdf.js';
+
+test('normal DSV sync writes verified labels and waybills for each booking', async () => {
+  const calls = [];
+  let uploadedBody;
+  const chilled = '1990353_Chilled';
+  const frozen = '1990353_Froozen';
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', outputPrefix: 'freight/test/', dryRun: false,
+    allowAll: true, syncLimit: 1
+  } }, {
+    shipments: [{ orderNumber: '1990353', deliveryMethod: 47,
+      consignments: [{ kind: 'fresh', consignmentNo: chilled }, { kind: 'frozen', consignmentNo: frozen }] }],
+    storage: {
+      async getObjectMetadata() { return null; },
+      async uploadObjectIfChanged(_name, body) { uploadedBody = body; return { uploaded: true }; }
+    },
+    nshiftClient: { async printDocuments(numbers, options) {
+      calls.push([numbers[0], options?.printOperation]);
+      const label = options?.printOperation === 'print';
+      return [{ name: label ? 'label.pdf' : 'waybill.pdf', type: label ? 1 : 2,
+        body: createPlaceholderPdf(`${label ? 'ETIKETT' : 'FRAKTSEDEL'} ${numbers[0]}`) }];
+    } }
+  });
+  assert.equal(result.uploaded, 1);
+  assert.deepEqual(calls, [[chilled, 'print'], [chilled, 'printWaybill'], [frozen, 'print'], [frozen, 'printWaybill']]);
+  const analysis = await analyzeFreightBookingPdf(uploadedBody, {
+    freightConsignmentFresh: chilled, freightConsignmentFrozen: frozen
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [3]);
+});
+
+test('opt-in DSV repair replaces incomplete PDF, preserving it if nShift lacks a label', async () => {
+  const booking = '200158234964';
+  const shipment = { orderNumber: '1993020', deliveryMethod: 47,
+    consignments: [{ kind: 'frozen', consignmentNo: booking }] };
+  const oldBody = createPlaceholderPdf(`FRAKTSEDEL ${booking}`);
+  let uploads = 0;
+  let failLabel = true;
+  const config = { nshift: { outputBucket: 'test-bucket', dryRun: false,
+    allowAll: true, repairExistingDsv: true, syncLimit: 1 } };
+  const overrides = {
+    shipments: [shipment],
+    storage: {
+      async getObjectMetadata() { return { generation: 'old-generation' }; },
+      async getObject(_name, _source, generation) {
+        assert.equal(generation, 'old-generation');
+        return { body: oldBody };
+      },
+      async uploadObjectIfChanged(_name, body) {
+        uploads += 1;
+        assert.notDeepEqual(body, oldBody);
+        return { uploaded: true };
+      }
+    },
+    nshiftClient: { async printDocuments(numbers, options) {
+      assert.deepEqual(numbers, [booking]);
+      const label = options?.printOperation === 'print';
+      if (label && failLabel) return [];
+      return [{ name: 'document.pdf', type: label ? 1 : 2,
+        body: createPlaceholderPdf(`${label ? 'ETIKETT' : 'FRAKTSEDEL'} ${booking}`) }];
+    } }
+  };
+  const failed = await syncFreightDocuments(config, overrides);
+  assert.equal(failed.failed, 1);
+  assert.equal(uploads, 0);
+  failLabel = false;
+  const repaired = await syncFreightDocuments(config, overrides);
+  assert.equal(repaired.uploaded, 1);
+  assert.equal(uploads, 1);
+});
+
+test('opt-in DSV repair skips a PDF already complete for its current booking', async () => {
+  const booking = '200158234964';
+  const complete = await mergePdfBuffers([
+    createPlaceholderPdf(`ETIKETT ${booking}`),
+    createPlaceholderPdf(`FRAKTSEDEL ${booking}`)
+  ]);
+  let calls = 0;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', dryRun: false, allowAll: true,
+    repairExistingDsv: true, syncLimit: 1
+  } }, {
+    shipments: [{ orderNumber: '1993020', deliveryMethod: 47,
+      consignments: [{ kind: 'frozen', consignmentNo: booking }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'complete-generation' }; },
+      async getObject() { return { body: complete }; }
+    },
+    nshiftClient: { async printDocuments() { calls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(calls, 0);
+});
 
 test('one-order DSV label test uploads only a verified label-first packet', async () => {
   const calls = [];

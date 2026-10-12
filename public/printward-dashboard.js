@@ -498,7 +498,8 @@ function renderFreightList() {
     const selectable = freightBulkCandidate({ order, documentType, documentReady });
     const status = panel.documentTracking
       ? !hasTemperatureBooking(order) ? 'Bokningsnummer saknas · kvar i listan'
-        : documentReady ? virtualStatus ? 'Simulerat utskriven · riktig status oförändrad' : `Dokument finns · ${statusLabel(printStatus)}` : 'Fraktdokument saknas'
+        : documentReady ? virtualStatus ? 'Simulerat utskriven · riktig status oförändrad'
+          : `${activeFreightPanel === 'dsv-finland' ? 'PDF finns · innehåll ej verifierat' : 'Dokument finns'} · ${statusLabel(printStatus)}` : 'Fraktdokument saknas'
       : 'Avgång visas · ingen utskrift här';
     const bookingRows = bookings?.length ? bookings : [{ kind: '–', number: '–' }];
     return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Bokningsnummer eller dokument saknas, eller ordern är redan utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : !hasTemperatureBooking(order) ? 'missing' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
@@ -506,7 +507,7 @@ function renderFreightList() {
   const name = freightNames[activeFreightPanel];
   const bookingCount = panel.orders.reduce((sum, item) => sum + (item.bookings?.length || 0), 0);
   const overview = panel.documentTracking
-    ? `${panel.ready} av ${panel.total} order har fraktdokument. ${panel.waiting} väntar på dokument. ${bookingCount} bokningsrader.`
+    ? `${panel.ready} av ${panel.total} order har ${activeFreightPanel === 'dsv-finland' ? 'PDF (etiketter och fraktsedlar verifieras först vid utskrift)' : 'fraktdokument'}. ${panel.waiting} väntar på dokument. ${bookingCount} bokningsrader.`
     : `${panel.departureCount} avgångar, ${panel.total} order. Inga dokument skrivs ut från denna grupp ännu.`;
   const reviewRows = (freightPlan?.orders || []).map((order) => {
     const bookingText = order.bookings?.length

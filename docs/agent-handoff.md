@@ -1193,3 +1193,26 @@ are verification needs, not claims that the running system is broken.
   Windows agent update, production deploy, freight-job change, or scheduler
   change was made. Incomplete freight packets remain skipped with reasons;
   obtaining missing verified DSV labels is still unresolved.
+
+### 2026-10-12 DSV source repair (local repository work)
+
+- The user accepted repeat nShift document retrieval if Printward's printed
+  state remains accurate. Normal DSV sync now requests a PDF label and waybill
+  per chilled/frozen booking, verifies each booking's label and freight pages,
+  and uploads only a complete combined PDF. Other carriers retain their sync
+  path. Orders without booking numbers stay visible but are skipped by bulk
+  printing; they cannot be fetched from nShift by this job.
+- `NSHIFT_DSV_REPAIR_EXISTING=true` is opt-in and defaults false. It reads the
+  existing DSV PDF at its generation and refetches only if current bookings
+  lack a verified label or waybill. A failure leaves the GCS object intact.
+  A changed upload gets a new generation, which Printward treats as needing
+  printing; old printed status does not automatically transfer. The DSV card
+  now labels its count "med PDF (ej verifierade)" because PDF presence alone
+  is not a complete packet.
+- Local Node suite passed 123/123 tests with synthetic PDFs and fake
+  nShift/storage; `npm` is not available on this Mac, so the equivalent
+  `node --test` command was used. `git diff --check` was clean. No nShift call,
+  Cloud Run job change, demo deploy, GitHub push, or physical print has been
+  made for this change. Before any rollout, inspect the live freight job and
+  account for the fact that `freight/2/` is read by production too. The code
+  and opt-in flag alone do not repair the existing Finland source PDFs.

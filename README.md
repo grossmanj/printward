@@ -221,17 +221,22 @@ DSV Finland uses the same per-booking separation: fryst and kylt become distinct
 stapled sections within each order, with a matching label first and
 four complete waybill copies after them. A DSV PDF that lacks one of the booked
 labels or waybills is rejected in preview and printing instead of silently printing an
-incomplete packet. The current nShift `printWaybill` source may contain only
-waybills; Printward does not invent missing label pages. Existing freight PDFs
-must be checked for completeness before a physical DSV test.
+incomplete packet. Old nShift `printWaybill` PDFs may contain only waybills;
+Printward does not invent missing label pages. New DSV syncs fetch and verify
+one label plus one waybill per booking. Existing DSV PDFs stay unchanged unless
+`NSHIFT_DSV_REPAIR_EXISTING=true` is deliberately enabled on the freight job.
+That option reads the existing generation and refetches only if the current
+bookings lack a verified label or waybill. A failed fetch leaves the old PDF
+intact. A changed PDF generation needs printing again in Printward; fetching
+from nShift itself does not count as physical printing.
 The isolated DSV label test can now check one order with either one booking or
 an exact chilled/frozen pair. Set `NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER`,
 `NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBERS` (comma-separated exact numbers),
 `NSHIFT_ALLOWED_ORDER_NUMBERS` to that single order, and
 `NSHIFT_FORCE_REFRESH=true`. The previous singular
-`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER` remains supported. This is still an
-explicit, potentially stateful nShift test path, not a general automatic DSV
-sync setting; a no-call preview must keep `NSHIFT_FETCH_ENABLED=false`.
+`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER` remains supported. This is an
+explicit, potentially stateful one-order test; a no-call preview must keep
+`NSHIFT_FETCH_ENABLED=false`.
 
 In another terminal, start the local print agent:
 
@@ -347,23 +352,21 @@ The sync job:
 - Reads booked consignments from `FreeInf1` where `InfCatNo = 8376`, `FrInfTp = 1213`, `FrInfTp2 = 2386`, `FrInfTp3 = 5325`, and `Val1 IN (2, 8)`.
 - Uses `FreeInf1.Txt1` and `FreeInf1.Txt2` as fresh/chilled and frozen consignment numbers.
 - Reads `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as reported pallet/half-pallet count metadata; these counts do not control PDF page duplication.
-- Calls nShift `ConsignmentWS.printWaybill` for each consignment number.
+- Calls nShift `ConsignmentWS.printWaybill` for ordinary freight. For DSV
+  Finland it fetches a `print` type-1 PDF label and a waybill separately for
+  each booking, then verifies both before upload.
 - Merges multiple PDFs into one `freight{OrdNo}.pdf`.
 - For `Kyl- och Frysexpressen Mälardalen AB` orders with booked consignments, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`, including when reported pallet counts are zero.
-- Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight.
+- Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight. Opt-in `NSHIFT_DSV_REPAIR_EXISTING=true` instead checks stored DSV PDFs and refetches incomplete ones.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
 
-For a **single DSV demo label test**, opt in with
-`NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER` and
-`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBER`, and set the same order in
-`NSHIFT_ALLOWED_ORDER_NUMBERS`. This test path requires exactly one matching
-booked DSV consignment, `NSHIFT_ALLOW_ALL=false`, and
-`NSHIFT_FORCE_REFRESH=true`; it queries only that order. It calls nShift for
-one PDF label and one waybill, verifies both pages against the booking number,
-and uploads a label-first PDF only if the page checks pass. Do not enable it on
-the recurring sync job or use it for an order with both chilled and frozen
-bookings until a separate multi-booking test is approved. nShift print calls
-may change its document-print history even when the GCS upload fails.
+For a **one-order DSV test**, opt in with
+`NSHIFT_DSV_LABEL_TEST_ORDER_NUMBER` and the exact one or two bookings in
+`NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBERS`; allow-list that same order with
+`NSHIFT_ALLOWED_ORDER_NUMBERS`. Require `NSHIFT_ALLOW_ALL=false` and
+`NSHIFT_FORCE_REFRESH=true`. The singular consignment setting remains valid
+for one booking. Do not leave the test override on a recurring job. nShift
+print calls may change its document-print history even if the upload fails.
 
 Default demo output:
 
