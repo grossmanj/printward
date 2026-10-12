@@ -1216,3 +1216,31 @@ are verification needs, not claims that the running system is broken.
   made for this change. Before any rollout, inspect the live freight job and
   account for the fact that `freight/2/` is read by production too. The code
   and opt-in flag alone do not repair the existing Finland source PDFs.
+
+### 2026-10-12 DSV source repair rollout and checks
+
+- With the user's approval, commit `28d327e25f30207700bef80ed7120606f54da8a2`
+  was pushed normally to `demo` after a fetch; `git ls-remote` confirmed the
+  remote SHA. Cloud Build `9285d174-2d4d-445c-b8aa-2ffa2d5a7367` succeeded.
+  `printward-demo` revision `printward-demo-00036-tbm` runs that image with its
+  existing demo runtime service account. The existing public demo URL returned
+  HTTP 200 for `/login` and HTTP 401 for unauthenticated `/api/health`.
+- The current `printward-freight-sync` job was inspected before update. It was
+  already scheduled every five minutes with live nShift fetching, output prefix
+  `freight/2/`, limit 50, and zero task retries. Only its image was changed to
+  the same tested SHA and `NSHIFT_DSV_REPAIR_EXISTING=true` was added; its
+  `webshop-api` service account, `node src/freight-sync-job.js` entry point,
+  and existing settings were retained. The job still writes to `freight/2/`,
+  which production also reads. Neither `printward-prod`, the scheduler, nor a
+  Windows agent was changed.
+- The first scheduled execution on the new image,
+  `printward-freight-sync-9jl8b`, completed successfully at
+  `2026-10-12T08:46:23Z` (1m18s). Its summary was 215 shipments checked,
+  25 PDFs uploaded, 190 skipped, zero failures. GCS generation timestamps
+  showed fresh PDFs for previously failing Finland orders 1993020, 1993099,
+  and 1993262 at approximately 08:45 UTC. Each DSV PDF was validated against
+  its current chilled/frozen booking set before upload by the new sync path.
+  This is source-document evidence, not proof of a physical print. The user
+  was asked to refresh demo on W10 and try the Finland print; paper output and
+  printed-status correctness await their observation. Orders without booking
+  numbers remain visible and are skipped by bulk printing.
