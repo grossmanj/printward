@@ -1165,3 +1165,31 @@ are verification needs, not claims that the running system is broken.
 - Full local Node test suite: 120 tests passed; `git diff --check` and browser
   JavaScript syntax check passed. No nShift call, physical print, GitHub push,
   Cloud Run deployment, or freight-job/scheduler change was made in this step.
+
+### 2026-10-12 freight bulk demo rollout
+
+- The freight bulk fix above was committed as
+  `54a64cdd4828eb3e3f35f1d078a670d2a477df0b` and pushed normally to
+  `demo`; `git ls-remote origin refs/heads/demo` confirmed that exact SHA.
+  The local Node suite passed 120 tests before the push.
+- Before deployment, the existing `printward-demo` Cloud Run configuration was
+  inspected in `visma-274514` / `europe-north1`. It used the demo runtime
+  service account and existing login/SQL Secret Manager references, SQL
+  database `F0002`, GCS prefix `2/`, freight prefix `freight/2/`, Datastore
+  namespace `printward_demo`, Serverless VPC Access connector
+  `connector-cloudrun-sql`, dashboard printing enabled, legacy printing
+  disabled, and `NSHIFT_FETCH_ENABLED=false`. The build deploys only a new
+  image; these settings were not supplied from script defaults.
+- Cloud Build trigger `printward-demo` ran build
+  `47988c05-9aeb-45c8-8df8-bc0d92c5deda` for that SHA. Its `npm ci`,
+  `npm test`, image build/push, and `deploy-demo` steps all succeeded. Cloud
+  Run revision `printward-demo-00034-d6m` received 100% of traffic and the
+  service reported healthy. The Containers view showed image tag
+  `54a64cdd4828eb3e3f35f1d078a670d2a477df0b` and the checked demo
+  environment values remained in place. `/login` returned HTTP 200 and
+  unauthenticated `/api/health` returned HTTP 401, as expected.
+- This is an availability and configuration check, not a physical print or a
+  proof that existing Finland source PDFs contain labels. No nShift call,
+  Windows agent update, production deploy, freight-job change, or scheduler
+  change was made. Incomplete freight packets remain skipped with reasons;
+  obtaining missing verified DSV labels is still unresolved.
