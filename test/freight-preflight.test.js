@@ -7,7 +7,7 @@ import { planFreightDocumentSelection } from '../src/dashboardRules.js';
 import { MockGcsClient } from '../src/gcsClient.js';
 import { mergePdfBuffers } from '../src/freightSync.js';
 import { createPlaceholderPdf } from '../src/pdf.js';
-import { verifyFreightPacket } from '../src/server.js';
+import { prepareBulkFreightPrint, verifyFreightPacket } from '../src/server.js';
 
 const storage = new MockGcsClient(path.join(projectRoot, 'data', 'mock-gcs-objects.json'));
 
@@ -167,4 +167,75 @@ test('PDF preflight refuses to guess which of two bookings owns an unmarked labe
   const ambiguous = { getObject: async () => ({ body: createPlaceholderPdf('Kolli-ID utan bokningsnummer') }) };
   const plan = planFreightDocumentSelection([order], 'kyl-and-frys', ['501']);
   await assert.rejects(() => verifyFreightPacket(ambiguous, [order], plan), /label pages could not be matched/);
+});
+
+test('bulk Kyl printing keeps verified orders and reports each unavailable order separately', async () => {
+  const good = await palletOrder('900001', {
+    deliveryMethod: 20,
+    freightConsignmentFresh: 'TEST-KYLT-01',
+    freightConsignmentFrozen: 'TEST-FRYST-02'
+  });
+  const clone = (number, overrides = {}) => ({
+    ...good,
+    orderNumber: number,
+    context: { ...good.context, ...overrides },
+    documents: { pallet: { ...good.documents.pallet } }
+  });
+  const noBooking = clone('900006', { freightConsignmentFresh: '', freightConsignmentFrozen: '' });
+  const noDocument = { ...clone('900007'), documents: {} };
+  const incomplete = clone('900008');
+  incomplete.documents.pallet.name = 'pallet900008.pdf';
+  const printed = clone('900009');
+  printed.documents.pallet.printStatus = 'printed';
+  const testStorage = {
+    getObject: (name, source, generation) => name === 'pallet900008.pdf'
+      ? { body: createPlaceholderPdf('Endast etikett') }
+      : storage.getObject(name, source, generation)
+  };
+
+  const result = await prepareBulkFreightPrint(testStorage,
+    [good, noBooking, noDocument, incomplete, printed], 'kyl-and-frys',
+    ['900001', '900006', '900007', '900008', '900009']);
+  assert.deepEqual(new Set(result.snapshots.map((item) => item.orderNumber)), new Set(['900001']));
+  assert.deepEqual(result.skipped.map((item) => item.orderNumber), ['900006', '900007', '900008', '900009']);
+  assert.match(result.skipped[0].reason, /Bokningsnummer saknas/);
+  assert.match(result.skipped[1].reason, /no available freight document/);
+  assert.match(result.skipped[2].reason, /PDF-kontroll misslyckades/);
+  assert.match(result.skipped[3].reason, /already printed/);
+});
+
+test('bulk DSV printing skips an order without a booking instead of blocking a valid Finland packet', async () => {
+  const ready = await dsvOrder('900004', {
+    deliveryMethod: 47,
+    freightConsignmentFresh: 'TEST-DSV-KYLT-07'
+  });
+  const unbooked = {
+    ...ready,
+    orderNumber: '1993262',
+    context: { ...ready.context, freightConsignmentFresh: '', freightConsignmentFrozen: '' }
+  };
+  const result = await prepareBulkFreightPrint(storage, [ready, unbooked], 'dsv-finland', ['900004', '1993262']);
+  assert.deepEqual(result.snapshots.map((item) => item.orderNumber), ['900004']);
+  assert.deepEqual(result.skipped, [{ orderNumber: '1993262', reason: 'Bokningsnummer saknas.' }]);
+});
+
+test('bulk DSV printing skips a frozen booking whose stored PDF has no matching label', async () => {
+  const ready = await dsvOrder('900004', {
+    deliveryMethod: 47,
+    freightConsignmentFresh: 'TEST-DSV-KYLT-07'
+  });
+  const missingFrozenLabel = await dsvOrder('900005', {
+    deliveryMethod: 48,
+    freightConsignmentFrozen: 'TEST-DSV-FRYST-13'
+  });
+  const testStorage = {
+    getObject: (name, source, generation) => name === 'freight900005.pdf'
+      ? { body: createPlaceholderPdf('FRAKTSEDEL TEST-DSV-FRYST-13') }
+      : storage.getObject(name, source, generation)
+  };
+  const result = await prepareBulkFreightPrint(testStorage,
+    [ready, missingFrozenLabel], 'dsv-finland', ['900004', '900005']);
+  assert.deepEqual(result.snapshots.map((item) => item.orderNumber), ['900004']);
+  assert.deepEqual(result.skipped.map((item) => item.orderNumber), ['900005']);
+  assert.match(result.skipped[0].reason, /No verified DSV label pages for Frozen booking/);
 });

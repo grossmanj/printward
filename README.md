@@ -184,9 +184,13 @@ Other carriers remain departure-only. The fictional mock order `900001` on
 actions require the dashboard print flag and the local Print Agent; selection
 and read-only review themselves do not print or call nShift.
 Bulk selection and the quick action skip orders without a chilled/frozen
-booking number, leaving them visible with a clear warning. Other incomplete
-PDFs still fail the server's all-or-nothing preflight; they are never printed
-as partial packets. Selecting chilled or frozen separately is not enabled:
+booking number, leaving them visible with a clear warning. The overview's
+freight quick action rechecks each order and its PDF independently: an order
+without a booking, complete document, or valid PDF is skipped and reported,
+while verified orders can proceed. The same rule applies when printing more
+than one selected freight order from a lookup. Nothing is printed if none pass.
+A single selected freight order remains strict, and no partial packet is ever
+printed. Selecting chilled or frozen separately is not enabled:
 printed status is currently tracked per document generation, not per booking,
 so partial output would falsely mark the other temperature printed.
 

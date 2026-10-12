@@ -1069,11 +1069,16 @@ are verification needs, not claims that the running system is broken.
   printed again through the chain panel; unknown transport is not assumed to
   be remote. Chain printed/total counts refer only to this remote subset.
 - Freight bulk selection and quick printing leave orders with no `Txt1`/`Txt2`
-  booking visible but skip them. This does **not** relax PDF preflight: any
-  selected order with an incomplete or ambiguous source PDF still blocks its
-  whole print request. Existing Finland waybill-only PDFs remain blocked from
-  label-first printing. The ordinary nShift sync is not yet verified to store
-  label pages for every DSV booking; the one-off test path is not a general fix.
+  booking visible but skip them. The overview's freight quick action now
+  preflights each order independently on the server and reports skipped order
+  numbers/reasons. Missing bookings, missing documents, already-printed
+  documents, and incomplete/ambiguous PDFs cannot enter the print job; valid
+  orders may proceed. If all fail, no job is created. Multiple selected freight
+  orders use the same skip rule; a single selected order stays strict.
+  Packet-level PDF verification is unchanged.
+  Existing Finland waybill-only PDFs remain blocked from label-first printing.
+  The ordinary nShift sync is not yet verified to store label pages for every
+  DSV booking; the one-off test path is not a general fix.
 - Separate chilled/frozen print buttons are intentionally not enabled yet.
   Printward marks the entire freight PDF generation printed after a job;
   printing one booking alone would incorrectly mark the other temperature
@@ -1122,3 +1127,41 @@ are verification needs, not claims that the running system is broken.
   registration display on printed orders, and the return worklist remain the
   unresolved items noted above. A Monday operator test should record exact
   order numbers and observed paper/status results before further changes.
+
+### 2026-10-12 freight bulk and sync investigation (local only)
+
+- The server previously rejected the entire overview freight quick-print job
+  when any selected order's source PDF failed verification. The local change
+  verifies each order separately and includes only complete packets; skipped
+  order numbers and reasons are returned to the browser. Explicitly selected
+  single-order freight print jobs remain strict; multi-order selections use the
+  same per-order skip rule after an explicit warning. No packet's PDF preflight
+  was relaxed.
+- Code inspection of the normal sync path shows DSV uses the generic
+  `printWaybill` operation; only the explicitly allow-listed DSV label test
+  fetches and verifies a label and waybill per chilled/frozen booking.
+  Non-force sync skips an existing freight PDF without checking whether its
+  booking set or labels are still complete. These are plausible explanations
+  for missing frozen labels, but no current Finland order or deployed source
+  PDF was inspected in this change. Do not auto-refresh or mass-fetch from
+  nShift based on this inference: its print operations may have side effects.
+- The user's demo screenshot shows `PDF verification failed: No DSV booking
+  numbers for order 1993262.` That is a missing-booking preflight failure,
+  not evidence of a missing frozen label. A synthetic DSV regression now
+  covers that exact order number: the bulk action skips it while retaining a
+  separately verified Finland packet. The current Visma/FreeInf1 values for
+  1993262 were not independently inspected.
+- A second screenshot shows `No verified DSV label pages for Frozen booking…`.
+  That is a separate PDF-content failure: a frozen booking exists, but its
+  stored PDF lacks a verified matching label page. A synthetic DSV regression
+  confirms bulk printing skips that packet and retains another complete DSV
+  packet. It does not repair or re-fetch the affected source PDF.
+- The freight-job deploy script defaults to `NSHIFT_SYNC_LIMIT=1`,
+  `NSHIFT_FETCH_ENABLED=false`, and a candidate limit of ten. This can explain
+  slow/no progress **if** the current demo job has those settings. Its live
+  configuration could not be read because the Google Cloud console session
+  required sign-in. Inspect the current job and scheduler before changing
+  cadence or limits; script defaults are not deployment evidence.
+- Full local Node test suite: 120 tests passed; `git diff --check` and browser
+  JavaScript syntax check passed. No nShift call, physical print, GitHub push,
+  Cloud Run deployment, or freight-job/scheduler change was made in this step.

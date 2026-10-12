@@ -216,6 +216,48 @@ test('dashboard freight print job contains only verified Kyl sections', async (t
   assert.match(dsvPayload.manifest.orders[0].documents[1].url, /copyMode=perDocument/);
 });
 
+test('bulk freight job skips missing documents without weakening selected-order printing', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-freight-bulk-test-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  const good = contexts.find((context) => context.orderNumber === '900001');
+  assert.ok(good);
+  contexts.push({ ...good, orderNumber: '900006', customerName: 'Saknar fraktdokument' });
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false',
+    PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    PRINTWARD_LEGACY_PRINT_ENABLED: 'false',
+    VISIBLE_DOCUMENT_TYPES: 'pallet,packingSlip,attachment,freight',
+    MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const selection = {
+    kind: 'freight', panelId: 'kyl-and-frys', deliveryDate: '2026-06-24',
+    orderNumbers: ['900001', '900006']
+  };
+
+  const strict = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify(selection)
+  });
+  assert.equal(strict.status, 409);
+
+  const bulk = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({ ...selection, bulkFreight: true })
+  });
+  assert.equal(bulk.status, 201);
+  const payload = await bulk.json();
+  assert.deepEqual(new Set(payload.manifest.orders.map((order) => order.orderNumber)), new Set(['900001']));
+  assert.deepEqual(payload.skipped.map((item) => item.orderNumber), ['900006']);
+  assert.match(payload.skipped[0].reason, /no available freight document/);
+
+  const none = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({ ...selection, orderNumbers: ['900006'], bulkFreight: true })
+  });
+  assert.equal(none.status, 409);
+  assert.deepEqual((await none.json()).skipped.map((item) => item.orderNumber), ['900006']);
+});
+
 async function openEventStream(handler, pathOrUrl, options = {}) {
   const url = new URL(pathOrUrl, 'http://127.0.0.1');
   const req = new Readable({

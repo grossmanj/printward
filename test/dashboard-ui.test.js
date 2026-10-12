@@ -81,6 +81,9 @@ test('freight bulk leaves orders without chilled/frozen booking visible but unse
   assert.match(script, /panel\.orders\.filter\(freightBulkCandidate\)/);
   assert.match(script, /Bokningsnummer saknas · kvar i listan/);
   assert.match(script, /Markera alla utskriftsbara i listan/);
+  assert.match(script, /printDashboardItems\(kind, panelId, label, items, \{ bulkFreight: kind === 'freight' \}\)/);
+  assert.match(script, /bulkFreight: selectedItems\.length > 1/);
+  assert.match(script, /body: JSON\.stringify\(\{[^]*bulkFreight,/);
 });
 
 test('own-car cards show Edmarks departure times and clarify ready versus total', () => {

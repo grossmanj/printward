@@ -131,7 +131,7 @@ function setVirtualQuick(card, label, items, note = '', verifyFreightPanelId = n
     if (simulationEnabled) {
       if (verifyFreightPanelId) openVerifiedFreightSimulation(label, items, verifyFreightPanelId);
       else openVirtualPrint(label, items, note);
-    } else if (realPrintingEnabled && kind) printDashboardItems(kind, panelId, label, items);
+    } else if (realPrintingEnabled && kind) printDashboardItems(kind, panelId, label, items, { bulkFreight: kind === 'freight' });
   };
 }
 
@@ -200,10 +200,11 @@ async function testPrinterSettings() {
   } catch (error) { status.textContent = `Agenten är inte redo: ${error.message}`; }
 }
 
-async function printDashboardItems(kind, panelId, label, items) {
+async function printDashboardItems(kind, panelId, label, items, { bulkFreight = false } = {}) {
   if (!realPrintingEnabled || activeRealPrint || !items.length) return;
   const orderNumbers = [...new Set(items.map((item) => String(item.orderNumber)))];
-  if (!window.confirm(`Skriva ut ${orderNumbers.length} order i ${label} på den här datorns skrivare? Detta är en riktig utskrift.`)) return;
+  const bulkWarning = bulkFreight ? ' Order utan bokningsnummer eller komplett PDF hoppas över och redovisas efteråt.' : '';
+  if (!window.confirm(`Skriva ut upp till ${orderNumbers.length} order i ${label} på den här datorns skrivare? Detta är en riktig utskrift.${bulkWarning}`)) return;
   activeRealPrint = true;
   showToast('Kontrollerar lokal skrivare och aktuella PDF-dokument…');
   try {
@@ -218,14 +219,18 @@ async function printDashboardItems(kind, panelId, label, items) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        kind, panelId, orderNumbers, deliveryDate: deliveryDate.value,
+        kind, panelId, orderNumbers, deliveryDate: deliveryDate.value, bulkFreight,
         user: localStorage.getItem('printward:user') || 'operator',
         printerName: defaults.printerName,
         options: defaults
       })
     });
     const payload = await response.json();
-    if (!response.ok) throw new Error((payload.errors || [payload.error || 'Utskriftsjobbet kunde inte skapas.']).join(' '));
+    if (!response.ok) {
+      const skipped = payload.skipped || [];
+      const detail = skipped.length ? ` Överhoppade: ${skipped.map((item) => `${item.orderNumber} (${item.reason})`).join('; ')}` : '';
+      throw new Error(`${(payload.errors || [payload.error || 'Utskriftsjobbet kunde inte skapas.']).join(' ')}${detail}`);
+    }
     const printed = await fetch(`${defaults.agentUrl}/print`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -234,11 +239,20 @@ async function printDashboardItems(kind, panelId, label, items) {
     });
     const result = await printed.json().catch(() => ({}));
     if (!printed.ok) throw new Error(result.error || 'Print Agent kunde inte skriva ut. Kontrollera jobbet innan du försöker igen.');
-    showToast(`${orderNumbers.length} order skickade till skrivaren. Uppdaterar status…`);
-    await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
-    if (statuses[activeView]) await loadOrders(activeView, true);
+    const actualOrders = new Set(payload.job?.orders?.map((order) => String(order.orderNumber)) || []);
+    const skipped = payload.skipped || [];
+    const skipText = skipped.length
+      ? ` ${skipped.length} överhoppade: ${skipped.map((item) => `${item.orderNumber} (${item.reason})`).join('; ')}`
+      : '';
+    showToast(`${actualOrders.size} order skickade till skrivaren.${skipText} Uppdaterar status…`, skipped.length ? 12000 : 2400);
+    try {
+      await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
+      if (statuses[activeView]) await loadOrders(activeView, true);
+    } catch {
+      showToast(`${actualOrders.size} order skickades till skrivaren, men status kunde inte uppdateras. Kontrollera utskriftskön innan du försöker igen.${skipText}`, 12000);
+    }
   } catch (error) {
-    showToast(`Utskrift stoppad: ${error.message}`);
+    showToast(`Utskrift stoppad: ${error.message}`, 12000);
   } finally {
     activeRealPrint = false;
     refreshSimulationDisplays();
@@ -353,7 +367,7 @@ function documentPreviewLink(document) {
   if (document.generation) params.set('generation', document.generation);
   return `<a href="/api/documents?${escapeHtml(params.toString())}" target="_blank" rel="noopener noreferrer">Granska ${escapeHtml(previewNames[document.type] || 'dokument')}</a>`;
 }
-function showToast(message) { toast.textContent = message; toast.classList.add('show'); window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.remove('show'), 2400); }
+function showToast(message, duration = 2400) { toast.textContent = message; toast.classList.add('show'); window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.remove('show'), duration); }
 function setActive(view) { activeView = view; document.querySelectorAll('.nav-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === view)); grid.hidden = view !== 'printward'; ordersView.hidden = view === 'printward'; document.querySelector('#lookupActions').hidden = view === 'printward'; }
 function lookupSnapshot(view = activeView) {
   return {
@@ -526,7 +540,8 @@ function renderFreightList() {
     ordersView.querySelector('.print-selected').addEventListener('click', () => {
       const items = selectedItems.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType]));
       if (simulationEnabled) openVerifiedFreightSimulation(`${name} · valda fraktdokument`, items, activeFreightPanel);
-      else printDashboardItems('freight', activeFreightPanel, `${name} · valda fraktdokument`, items);
+      else printDashboardItems('freight', activeFreightPanel, `${name} · valda fraktdokument`, items,
+        { bulkFreight: selectedItems.length > 1 });
     });
     ordersView.querySelector('#selectAllFreightReady').addEventListener('change', (event) => {
       for (const { order } of selectableVisible) {

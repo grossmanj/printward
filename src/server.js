@@ -650,6 +650,43 @@ export async function verifyFreightPacket(storage, selectedOrders, plan) {
   };
 }
 
+// The overview's bulk freight action is best-effort per order. Never let an
+// incomplete booking/PDF make otherwise verified orders unprintable, and never
+// include a skipped order in the job snapshot or printed-status callback.
+export async function prepareBulkFreightPrint(storage, orders, panelId, orderNumbers) {
+  if (!Array.isArray(orderNumbers) || orderNumbers.length < 1 || orderNumbers.length > 200) {
+    throw new Error('Select between 1 and 200 orders.');
+  }
+  const numbers = orderNumbers.map((value) => String(value).trim());
+  if (numbers.some((value) => !/^\d+$/.test(value)) || new Set(numbers).size !== numbers.length) {
+    throw new Error('Order numbers must be unique numeric values.');
+  }
+  const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+  const results = await mapWithConcurrency(numbers, 6, async (number) => {
+    const order = byNumber.get(number);
+    if (!order) {
+      return { skipped: { orderNumber: number, reason: 'Ordern finns inte längre på valt datum.' } };
+    }
+    if (!hasText(order.context?.freightConsignmentFresh) && !hasText(order.context?.freightConsignmentFrozen)) {
+      return { skipped: { orderNumber: number, reason: 'Bokningsnummer saknas.' } };
+    }
+    const plan = planDashboardPrintSelection(orders, 'freight', panelId, [number]);
+    if (!plan.valid) {
+      return { skipped: { orderNumber: number, reason: plan.errors.join(' ') } };
+    }
+    try {
+      await verifyFreightPacket(storage, [order], plan);
+      return { snapshots: freightOnlyPrintSnapshots([order], plan) };
+    } catch (error) {
+      return { skipped: { orderNumber: number, reason: `PDF-kontroll misslyckades: ${error.message}` } };
+    }
+  });
+  return {
+    snapshots: results.flatMap((result) => result.snapshots || []),
+    skipped: results.flatMap((result) => result.skipped ? [result.skipped] : [])
+  };
+}
+
 function comboSeparatorText(order = {}) {
   const context = order.context || {};
   return context.deliveryMethodName || (context.deliveryMethod ? `Method ${context.deliveryMethod}` : 'No delivery method');
@@ -1264,26 +1301,36 @@ async function handleApi(req, res, requestUrl, context) {
       sendJson(res, 503, { error: 'The order source is unavailable; printing is stopped.' });
       return;
     }
-    const plan = planDashboardPrintSelection(
-      filterOrders(orders, { deliveryDate }), body.kind, body.panelId, body.orderNumbers
-    );
-    if (!plan.valid) {
-      sendJson(res, 409, { error: 'The print selection is no longer valid.', errors: plan.errors });
-      return;
-    }
-    const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
-    const selectedOrders = plan.orders.map(({ orderNumber }) => byNumber.get(orderNumber));
+    const currentOrders = filterOrders(orders, { deliveryDate });
     let snapshots;
+    let skipped = [];
     try {
-      if (body.kind === 'freight') {
-        await verifyFreightPacket(storage, selectedOrders, plan);
-        snapshots = freightOnlyPrintSnapshots(selectedOrders, plan);
+      if (body.kind === 'freight' && body.bulkFreight === true) {
+        ({ snapshots, skipped } = await prepareBulkFreightPrint(
+          storage, currentOrders, body.panelId, body.orderNumbers
+        ));
+        if (!snapshots.length) {
+          sendJson(res, 409, { error: 'Inga kompletta fraktdokument kunde skrivas ut.', skipped });
+          return;
+        }
       } else {
-        snapshots = await buildPrintSnapshots(storage, selectedOrders, ['packingSlip', 'attachment']);
-        const expected = new Set(['packingSlip', 'attachment']);
-        if (snapshots.length !== selectedOrders.length || snapshots.some((snapshot) =>
-          snapshot.documents.length !== 2 || snapshot.documents.some((document) => !expected.has(document.type)))) {
-          throw new Error('A slip/attachment packet could not be verified for every selected order.');
+        const plan = planDashboardPrintSelection(currentOrders, body.kind, body.panelId, body.orderNumbers);
+        if (!plan.valid) {
+          sendJson(res, 409, { error: 'The print selection is no longer valid.', errors: plan.errors });
+          return;
+        }
+        const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+        const selectedOrders = plan.orders.map(({ orderNumber }) => byNumber.get(orderNumber));
+        if (body.kind === 'freight') {
+          await verifyFreightPacket(storage, selectedOrders, plan);
+          snapshots = freightOnlyPrintSnapshots(selectedOrders, plan);
+        } else {
+          snapshots = await buildPrintSnapshots(storage, selectedOrders, ['packingSlip', 'attachment']);
+          const expected = new Set(['packingSlip', 'attachment']);
+          if (snapshots.length !== selectedOrders.length || snapshots.some((snapshot) =>
+            snapshot.documents.length !== 2 || snapshot.documents.some((document) => !expected.has(document.type)))) {
+            throw new Error('A slip/attachment packet could not be verified for every selected order.');
+          }
         }
       }
     } catch (error) {
@@ -1304,7 +1351,7 @@ async function handleApi(req, res, requestUrl, context) {
       status: job.status,
       orderNumbers: jobOrderNumbers(job)
     });
-    sendJson(res, 201, { job, manifest: buildManifest(req, job) });
+    sendJson(res, 201, { job, manifest: buildManifest(req, job), skipped });
     return;
   }
 
