@@ -10,8 +10,52 @@ import {
   extractKylFreightSection,
   extractPdfPages,
   inferKylPalletLabelPages,
-  repeatPdfPages
+  repeatPdfPages,
+  stampVismaPackingSlipRegistration
 } from '../src/pdf.js';
+
+async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pdf', field = true } = {}) {
+  const pdf = await PDFDocument.create();
+  pdf.setTitle(title);
+  const page = pdf.addPage([593.794276, 840.440741]);
+  if (field) {
+    const content = [
+      'BT',
+      '1 0 0 -1 316.5165 277.021 Tm',
+      '/Times-Roman 10 Tf',
+      '[(Transportsätt)] TJ',
+      'ET',
+      'BT',
+      '1 0 0 -1 316.5165 291.1942 Tm',
+      '/Times-Roman 10 Tf',
+      '[(SYD)] TJ',
+      'ET'
+    ].join('\n');
+    const stream = pdf.context.flateStream(Buffer.from(content, 'latin1'));
+    page.node.addContentStream(pdf.context.register(stream));
+  }
+  return Buffer.from(await pdf.save());
+}
+
+test('replaces only the verified Visma slip transport field on the print copy', async () => {
+  const source = await createVismaSlipFixture();
+  const stamped = await stampVismaPackingSlipRegistration(source, 'UEJ 64A');
+  const pdf = await PDFDocument.load(stamped);
+  assert.equal(pdf.getPageCount(), 1);
+  assert.equal(pdf.getTitle(), 'Följesedel NettoNetto(2050).pdf');
+  assert.notDeepEqual(stamped, source);
+
+  const alternate = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2101).pdf' });
+  assert.ok((await stampVismaPackingSlipRegistration(alternate, 'UEJ 64A')).length > 0);
+});
+
+test('rejects unverified Visma layouts and invalid registration text', async () => {
+  const wrongForm = await createVismaSlipFixture({ title: 'Another form.pdf' });
+  const missingField = await createVismaSlipFixture({ field: false });
+  await assert.rejects(stampVismaPackingSlipRegistration(wrongForm, 'UEJ 64A'), /not a verified Visma form/);
+  await assert.rejects(stampVismaPackingSlipRegistration(missingField, 'UEJ 64A'), /transport field could not be verified/);
+  await assert.rejects(stampVismaPackingSlipRegistration(await createVismaSlipFixture(), 'SYD'), /verified vehicle registration/);
+});
 
 async function createMarkerPdf(pages) {
   const merged = await PDFDocument.create();

@@ -1391,7 +1391,7 @@ are verification needs, not claims that the running system is broken.
   `npm test` was unavailable on the Mac because `npm` is not installed there,
   while the successful Cloud Build ran `npm ci` and `npm test` before deployment.
 
-### 2026-10-13 dismissible print progress (local work)
+### 2026-10-13 dismissible print progress (deployed to demo)
 
 - After the demo test, Edmark reported that the fixed progress panel kept
   covering the screen even after the print count updated. The panel now has a
@@ -1403,3 +1403,61 @@ are verification needs, not claims that the running system is broken.
 - The Ricoh may still pause between individual Windows spool jobs. The agent
   deliberately keeps per-order/per-temperature sections separate for correct
   stapling. This UI change does not merge those spool jobs or change the agent.
+- The owner approved a demo deploy. Commit
+  `1dc536b837492a920b42a69370026a149d17008e` was pushed to `origin/demo`
+  and verified by `git ls-remote`. Cloud Build run `6e06cca6` completed
+  successfully, then Cloud Run `printward-demo` in `europe-north1` showed the
+  same image SHA as healthy and serving. Local bundled Node CLI passed 137/137
+  tests and `git diff --check` passed; the Cloud Build pipeline runs `npm ci`
+  and `npm test`. This was a web/UI deploy only: no Windows-agent update,
+  physical print test, production deploy, nShift call, or scheduler change.
+- A white/unstyled browser tab was a direct local `file://` open of
+  `public/printward-dashboard.html`, not the hosted demo. The user should open
+  the authenticated HTTPS `printward-demo` dashboard instead; the file copy
+  cannot load the app's absolute CSS/JS routes correctly.
+- For future unattended freight printing, the proposed split is a cloud-hosted
+  schedule and admin configuration for group/time/weekdays, plus a durable
+  pending-job queue polled by an authenticated local Print Agent. A cloud
+  scheduler alone cannot reach the agent on the office PC's loopback address.
+  Require complete documents, generation-aware deduplication, atomic job
+  reservation, offline/failed-job recovery and preserved packet stapling before
+  activation. Kyl & Frys and Finland are candidate night groups; BEST may join
+  only after its separate automatic booking integration is ready. Nothing is
+  scheduled or enabled yet.
+
+### 2026-10-13 manual Kyl & Frys print-status registration (local only)
+
+- The owner asked to select Kyl & Frys orders already printed outside
+  Printward, register them as printed, close the lookup, and immediately update
+  the overview counter. This has been implemented locally but **not pushed or
+  deployed** at the owner's explicit request to wait. It does not create a
+  print job, contact the Print Agent, or call nShift. The user confirms the
+  selection before the status write. It marks the order's current pallet PDF
+  generation, not an individual chilled/frozen booking; existing PDF without
+  a booking number is allowed, missing PDF is not. An old browser PDF version
+  is rejected. A replaced generation returns to reprint-needed. The state
+  stores record an idempotent manual print event and invalidate the server
+  order cache so the first-page count refreshes.
+- The owner also supplied order 1993113 (Chop Chop / Nyköping) as an example
+  of a *physical printed slip* showing `SYD` even though the current route is
+  a vehicle registration. A read-only check in the authenticated live demo
+  for 2026-10-13 showed `UEJ 64A`, route `318`, priority `06:00`, and status
+  `Utskriven` in both search and order detail. The referenced `order1993113.pdf`
+  GCS generation corresponds to approximately 02:39:46 Stockholm time on
+  2026-10-13; the time of Visma rerouting has not been verified. The order
+  remains in the morning lookup by design, but is excluded from `Skriv ut klara`.
+  Current code already joins the order's `DelMt`, not the customer default,
+  while the stored packing-slip PDF remains stale until Visma prints it again.
+  The owner confirmed that direct Visma printing uses the current route.
+  Locally, Printward now captures a registration from the current order
+  `DelMt` at job creation and stamps it over the transport value only on the
+  job-authorized packing-slip download. The original GCS object and attachment
+  are unchanged. Real PDFs for orders 1993113 (one-page form 2050) and
+  1993310 (two-page form 2101) were rendered and inspected with `UEJ 64A`
+  replacing `SYD` on each page. The transformation checks the form title,
+  page dimensions, field text/coordinates, and plate shape, failing closed on
+  unknown layouts. It is **not deployed or physically printed yet**; do not
+  describe the paper fix as live until a demo deploy and one-page physical
+  verification. Retry preserves the captured registration, so a new job is
+  required after later rerouting. The existing unmodified source-PDF preview
+  may still show the old route.

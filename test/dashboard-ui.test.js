@@ -55,7 +55,7 @@ test('dispatch, freight and chain lookups expose view-only delivery-method sorti
 });
 
 test('freight lookup wires separate review and print controls before selection handlers', () => {
-  assert.match(script, /<button id="reviewFreightSelection"[^>]*>Granska valda<\/button><button class="print-selected"/);
+  assert.match(script, /<button id="reviewFreightSelection"[^>]*>Granska utskriftsbara<\/button><button class="print-selected"/);
   assert.match(script, /ordersView\.querySelector\('\.print-selected'\)\.addEventListener\('click'/);
   assert.match(script, /ordersView\.querySelector\('#selectAllFreightReady'\)\.addEventListener\('change'/);
   assert.match(script, /ordersView\.querySelectorAll\('\[data-select-freight-order\]'\)/);
@@ -75,15 +75,23 @@ test('follow-slip lookup has clickable method bundles and searchable route codes
   assert.doesNotMatch(script, /dialog\.addEventListener\('close',[^]*closeLookup\(\)/);
 });
 
-test('freight bulk leaves orders without chilled/frozen booking visible but unselected', () => {
+test('freight bulk skips missing bookings while manual Kyl status can select their existing PDFs', () => {
   assert.match(script, /function hasTemperatureBooking\(order\)/);
-  assert.match(script, /const selectableVisible = visibleItems\.filter\(freightBulkCandidate\)/);
-  assert.match(script, /panel\.orders\.filter\(freightBulkCandidate\)/);
+  assert.match(script, /const selectableVisible = visibleItems\.filter\(freightManualMarkCandidate\)/);
+  assert.match(script, /const printableSelectedItems = selectedItems\.filter\(freightBulkCandidate\)/);
   assert.match(script, /Ingen utskriftsbar bokning · ny utskrift spärrad/);
-  assert.match(script, /Markera alla utskriftsbara i listan/);
+  assert.match(script, /Markera alla med fraktdokument i listan/);
   assert.match(script, /printDashboardItems\(kind, panelId, label, items, \{ bulkFreight: kind === 'freight' \}\)/);
-  assert.match(script, /bulkFreight: selectedItems\.length > 1/);
+  assert.match(script, /bulkFreight: printableSelectedItems\.length > 1/);
   assert.match(script, /body: JSON\.stringify\(\{[^]*bulkFreight,/);
+});
+
+test('Kyl manual mark confirms selected orders, sends no print job, and reloads the overview', () => {
+  assert.match(script, /activeFreightPanel === 'kyl-and-frys' \? `<button id="markFreightPrinted"/);
+  assert.match(script, /window\.confirm\(`Markera \$\{count\} Kyl & Frys-order som redan utskrivna/);
+  assert.match(script, /fetch\('\/api\/dashboard\/freight-mark-printed'/);
+  assert.match(script, /documentVersions, user:/);
+  assert.match(script, /closeLookup\(\);\s*await loadFreightDashboard\(true\)/);
 });
 
 test('all tracked freight cards use a compact count and keep print status visible without a booking', () => {

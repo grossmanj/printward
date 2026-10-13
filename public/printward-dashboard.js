@@ -55,6 +55,7 @@ let freightReviewPending = false;
 let freightPlan = null;
 let freightPlanError = '';
 let freightPlanRequest = 0;
+let manualMarkPending = false;
 let returnPayload = null;
 let returnRequest = 0;
 const selectedReturnOrders = new Set();
@@ -118,6 +119,10 @@ function freightBulkCandidate(item) {
   const { order, documentType, documentReady } = item;
   return documentReady && hasTemperatureBooking(order)
     && pendingOrderDocuments(order, [documentType]).length > 0;
+}
+
+function freightManualMarkCandidate(item) {
+  return item.documentReady && item.printStatus !== 'printed';
 }
 
 function virtualPrintLabel(orderNumber, types, date = deliveryDate.value) {
@@ -637,13 +642,14 @@ function renderFreightList() {
       context.freightConsignmentFrozen, ...(context.freightConsignmentNumbers || [])]
       .filter(Boolean).join(' ').toLowerCase().includes(query);
   }), lookupSort);
-  const selectableVisible = visibleItems.filter(freightBulkCandidate);
-  const selectedItems = panel.orders.filter((item) => freightBulkCandidate(item)
+  const selectableVisible = visibleItems.filter(freightManualMarkCandidate);
+  const selectedItems = panel.orders.filter((item) => freightManualMarkCandidate(item)
     && selectedFreightOrders.has(String(item.order.orderNumber)));
+  const printableSelectedItems = selectedItems.filter(freightBulkCandidate);
   const rows = visibleItems.flatMap(({ order, documentType, documentReady, printStatus, bookings }) => {
     const context = order.context || {};
     const virtualStatus = documentType && simulated(order.orderNumber, documentType);
-    const selectable = freightBulkCandidate({ order, documentType, documentReady });
+    const selectable = freightManualMarkCandidate({ order, documentType, documentReady, printStatus });
     const status = panel.documentTracking
       ? documentReady ? virtualStatus ? 'PDF finns · simulerat utskriven · riktig status oförändrad'
         : `PDF finns · ${statusLabel(printStatus)}` : 'PDF saknas'
@@ -651,7 +657,7 @@ function renderFreightList() {
     const bookingWarning = panel.documentTracking && !hasTemperatureBooking(order)
       ? '<small class="freight-booking-warning">Ingen utskriftsbar bokning · ny utskrift spärrad</small>' : '';
     const bookingRows = bookings?.length ? bookings : [{ kind: '–', number: '–' }];
-    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Utskriftsbar bokning eller PDF saknas, eller ordern är redan utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${bookingWarning}${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
+    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Fraktdokument saknas eller ordern är redan registrerad som utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${bookingWarning}${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
   }).join('');
   const name = freightNames[activeFreightPanel];
   const bookingCount = panel.orders.reduce((sum, item) => sum + (item.bookings?.length || 0), 0);
@@ -680,18 +686,18 @@ function renderFreightList() {
     return `<li><strong>Order ${escapeHtml(section.orderNumber)} · ${label}</strong><small>${pages}${copies}</small></li>`;
   }).join('');
   const selection = panel.documentTracking
-    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla utskriftsbara i listan</label><span>${selectedItems.length} valda · order utan utskriftsbar bokning ligger kvar men hoppas över</span><button id="reviewFreightSelection" type="button" ${selectedItems.length && !activeRealPrint ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
+    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla med fraktdokument i listan</label><span>${selectedItems.length} valda · ${printableSelectedItems.length} kan skickas till skrivaren</span><button id="reviewFreightSelection" type="button" ${printableSelectedItems.length && !activeRealPrint && !manualMarkPending ? '' : 'disabled'}>Granska utskriftsbara</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && printableSelectedItems.length && !activeRealPrint && !manualMarkPending ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent; order utan bokning hoppas över' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera utskriftsbara' : 'Skriv ut utskriftsbara'}</button>${activeFreightPanel === 'kyl-and-frys' ? `<button id="markFreightPrinted" class="mark-printed" type="button" ${realPrintingEnabled && selectedItems.length && selectedItems.length <= 200 && !activeRealPrint && !manualMarkPending ? '' : 'disabled'} title="Registrerar befintliga fraktdokument som redan utskrivna utan att skicka ett utskriftsjobb">Markera som utskrivna</button>` : ''}</div>`
     : '';
-  const review = panel.documentTracking && freightReviewOpen && selectedItems.length
-    ? `<section class="dispatch-review freight-review" aria-label="Granskning av fraktdokument"><h2>Valda fraktdokument · ${selectedItems.length} order</h2><p>Servern kontrollerar grupp, PDF-sidor och ordning mot aktuell data. Kylt och fryst visas som egna bokningsrader men väljs per order. Inga följesedlar ingår och ingen utskrift startas.</p>${freightReviewPending ? '<p>Kontrollerar PDF-sidor…</p>' : freightPlanError ? `<p class="freight-plan-error">${escapeHtml(freightPlanError)}</p>` : `<ol>${reviewRows}</ol><h3>Verifierad sidordning</h3><ol>${reviewSections}</ol>`}</section>`
+  const review = panel.documentTracking && freightReviewOpen && printableSelectedItems.length
+    ? `<section class="dispatch-review freight-review" aria-label="Granskning av fraktdokument"><h2>Valda fraktdokument · ${printableSelectedItems.length} order</h2><p>Servern kontrollerar grupp, PDF-sidor och ordning mot aktuell data. Kylt och fryst visas som egna bokningsrader men väljs per order. Inga följesedlar ingår och ingen utskrift startas.</p>${freightReviewPending ? '<p>Kontrollerar PDF-sidor…</p>' : freightPlanError ? `<p class="freight-plan-error">${escapeHtml(freightPlanError)}</p>` : `<ol>${reviewRows}</ol><h3>Verifierad sidordning</h3><ol>${reviewSections}</ol>`}</section>`
     : '';
   ordersView.innerHTML = `<header><div><h1>${name}</h1><p>${overview} Använd Visa order för detaljer.</p></div>${lookupSortControl()}</header>${selection}${rows ? `<table class="orders-table"><thead><tr>${panel.documentTracking ? '<th>Välj</th>' : ''}<th>Order</th><th>Kund</th><th>Avgång / körsätt</th><th>Bokningsnummer</th><th>Fraktdokument</th><th>Detaljer</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order i denna grupp för valt datum och sökning.</div>'}${review}`;
   if (panel.documentTracking) {
     ordersView.querySelector('.print-selected').addEventListener('click', () => {
-      const items = selectedItems.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType]));
+      const items = printableSelectedItems.flatMap(({ order, documentType }) => pendingOrderDocuments(order, [documentType]));
       if (simulationEnabled) openVerifiedFreightSimulation(`${name} · valda fraktdokument`, items, activeFreightPanel);
       else printDashboardItems('freight', activeFreightPanel, `${name} · valda fraktdokument`, items,
-        { bulkFreight: selectedItems.length > 1 });
+        { bulkFreight: printableSelectedItems.length > 1 });
     });
     ordersView.querySelector('#selectAllFreightReady').addEventListener('change', (event) => {
       for (const { order } of selectableVisible) {
@@ -714,7 +720,7 @@ function renderFreightList() {
         const response = await fetch('/api/dashboard/freight-packet-check', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ deliveryDate: date, panelId, orderNumbers: selectedItems.map(({ order }) => String(order.orderNumber)) })
+          body: JSON.stringify({ deliveryDate: date, panelId, orderNumbers: printableSelectedItems.map(({ order }) => String(order.orderNumber)) })
         });
         const payload = await response.json();
         if (request !== freightPlanRequest || activeFreightPanel !== panelId || deliveryDate.value !== date) return;
@@ -729,6 +735,41 @@ function renderFreightList() {
         renderFreightList();
       }
     });
+    if (activeFreightPanel === 'kyl-and-frys') {
+      ordersView.querySelector('#markFreightPrinted').addEventListener('click', async () => {
+        if (manualMarkPending || !selectedItems.length) return;
+        const count = selectedItems.length;
+        if (!window.confirm(`Markera ${count} Kyl & Frys-order som redan utskrivna? Detta skickar inget till skrivaren.`)) return;
+        manualMarkPending = true;
+        renderFreightList();
+        try {
+          const documentVersions = Object.fromEntries(selectedItems.map(({ order, documentType }) => {
+            const document = order.documents[documentType];
+            return [String(order.orderNumber), { name: document.name, source: document.source || 'primary',
+              generation: document.generation || null, updated: document.updated || null }];
+          }));
+          const response = await fetch('/api/dashboard/freight-mark-printed', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deliveryDate: deliveryDate.value, panelId: activeFreightPanel,
+              orderNumbers: selectedItems.map(({ order }) => String(order.orderNumber)),
+              documentVersions, user: localStorage.getItem('printward:user') || 'operator' })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Kunde inte uppdatera utskriftsstatus.');
+          selectedFreightOrders.clear();
+          clearFreightReview();
+          closeLookup();
+          await loadFreightDashboard(true);
+          showToast(`${result.count} order markerade som utskrivna. Ingen utskrift skickades.`);
+        } catch (error) {
+          showToast(error.message);
+        } finally {
+          manualMarkPending = false;
+          if (activeView === 'freight') renderFreightList();
+        }
+      });
+    }
     ordersView.querySelectorAll('[data-select-freight-order]').forEach((checkbox) => {
       checkbox.addEventListener('click', (event) => event.stopPropagation());
       checkbox.addEventListener('change', (event) => {
@@ -1474,7 +1515,7 @@ async function refreshDashboard(mode = 'auto', background = true) {
 }
 
 function canAutoRefresh() {
-  return !document.hidden && !activeRealPrint && !autoRefreshRunning && !initialLoading
+  return !document.hidden && !activeRealPrint && !manualMarkPending && !autoRefreshRunning && !initialLoading
     && ![...document.querySelectorAll('dialog')].some((item) => item.open)
     && !(activeView === 'freight' && (selectedFreightOrders.size || freightReviewOpen))
     && !(activeView === 'dispatch' && (selectedDispatchOrders.size || dispatchReviewOpen))

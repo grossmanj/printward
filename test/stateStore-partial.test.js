@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { StateStore, summarizeJobProgress } from '../src/stateStore.js';
+import { StateStore, buildPrintIndex, summarizeJobProgress } from '../src/stateStore.js';
+import { buildOrders } from '../src/documents.js';
 
 async function withStore(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'printward-partial-test-'));
@@ -110,5 +111,23 @@ test('dashboard success cannot mark an order printed without section confirmatio
     const result = await store.completeJob(job.id, { status: 'printed' });
     assert.equal(result.status, 'failed');
     assert.deepEqual(result.confirmedOrderNumbers, []);
+  });
+});
+
+test('manual freight status is idempotent and belongs only to the marked PDF generation', async () => {
+  await withStore(async (store) => {
+    const document = { orderNumber: '701', type: 'pallet', name: 'pallet701.pdf', source: 'primary',
+      generation: '11', updated: '2026-10-13T08:00:00Z' };
+    assert.deepEqual(await store.markDocumentsPrinted([document], 'Edmark'), ['701']);
+    assert.deepEqual(await store.markDocumentsPrinted([document], 'Edmark'), []);
+    const state = await store.getState();
+    assert.equal(state.jobs.length, 0);
+    assert.equal(state.printEvents.length, 1);
+    assert.equal(state.printEvents[0].method, 'manual');
+    assert.equal(state.printEvents[0].printedBy, 'Edmark');
+    const current = buildOrders([document], buildPrintIndex(state));
+    assert.equal(current[0].documents.pallet.printStatus, 'printed');
+    const replaced = buildOrders([{ ...document, generation: '12', updated: '2026-10-13T09:00:00Z' }], buildPrintIndex(state));
+    assert.equal(replaced[0].documents.pallet.printStatus, 'reprint');
   });
 });

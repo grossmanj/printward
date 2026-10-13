@@ -147,6 +147,47 @@ test('dashboard print endpoint requires an explicit feature flag and a fresh eli
   assert.equal(payload.job.notes, 'Dashboard dispatch: early (2026-06-25)');
 });
 
+test('own-car manifest captures the current order registration and fails closed for an unknown slip form', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-route-stamp-test-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  const order = contexts.find((context) => context.orderNumber === '1001');
+  assert.ok(order);
+  order.deliveryMethodName = 'UEJ 64A';
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false',
+    PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const created = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({
+      kind: 'dispatch', panelId: 'early', deliveryDate: '2026-06-25', orderNumbers: ['1001']
+    })
+  });
+  assert.equal(created.status, 201);
+  const { manifest } = await created.json();
+  const slip = manifest.orders[0].documents.find((document) => document.type === 'packingSlip');
+  const attachment = manifest.orders[0].documents.find((document) => document.type === 'attachment');
+  assert.equal(slip.routeRegistration, 'UEJ 64A');
+  assert.equal(attachment.routeRegistration, undefined);
+
+  const printable = await request(handler, slip.url);
+  assert.equal(printable.status, 500);
+  assert.match((await printable.json()).error, /not a verified Visma form/);
+  const withoutVersion = new URL(slip.url);
+  withoutVersion.searchParams.delete('generation');
+  if (slip.generation) {
+    const changedVersion = await request(handler, withoutVersion.toString());
+    assert.equal(changedVersion.status, 409);
+  }
+  const preview = await request(handler, `/api/documents?name=${encodeURIComponent(slip.name)}&source=primary`);
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('content-type'), 'application/pdf');
+});
+
 test('cash-payment order cannot create a packing-slip job through dashboard or legacy printing', async (t) => {
   const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-cash-order-test-'));
   t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
@@ -256,6 +297,88 @@ test('bulk freight job skips missing documents without weakening selected-order 
   });
   assert.equal(none.status, 409);
   assert.deepEqual((await none.json()).skipped.map((item) => item.orderNumber), ['900006']);
+});
+
+test('selected Kyl orders can be registered as already printed without creating a job', async (t) => {
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    VISIBLE_DOCUMENT_TYPES: 'pallet,packingSlip,attachment,freight'
+  });
+  const endpoint = '/api/dashboard/freight?deliveryDate=2026-06-24&refresh=1';
+  const before = await (await request(handler, endpoint)).json();
+  const panel = before.panels['kyl-and-frys'];
+  const item = panel.orders.find(({ order }) => order.orderNumber === '900001');
+  assert.ok(item?.documentReady);
+  const document = item.order.documents[item.documentType];
+  const body = JSON.stringify({ deliveryDate: '2026-06-24', panelId: 'kyl-and-frys',
+    orderNumbers: ['900001'], user: 'Edmark', documentVersions: {
+      '900001': { name: document.name, source: document.source, generation: document.generation,
+        updated: document.updated }
+    } });
+  const marked = await request(handler, '/api/dashboard/freight-mark-printed', { method: 'POST', body });
+  assert.equal(marked.status, 200);
+  assert.deepEqual((await marked.json()).marked, ['900001']);
+  const after = await (await request(handler, endpoint)).json();
+  assert.equal(after.panels['kyl-and-frys'].printed, panel.printed + 1);
+  const updated = after.panels['kyl-and-frys'].orders.find(({ order }) => order.orderNumber === '900001');
+  assert.equal(updated.printStatus, 'printed');
+  const jobs = await (await request(handler, '/api/print-jobs')).json();
+  assert.deepEqual(jobs.jobs, []);
+  const repeated = await request(handler, '/api/dashboard/freight-mark-printed', { method: 'POST', body });
+  assert.equal(repeated.status, 200);
+  assert.deepEqual((await repeated.json()).alreadyPrinted, ['900001']);
+});
+
+test('manual freight status rejects stale, missing and unauthorized selections', async (t) => {
+  const enabled = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    VISIBLE_DOCUMENT_TYPES: 'pallet,packingSlip,attachment,freight'
+  });
+  const endpoint = '/api/dashboard/freight-mark-printed';
+  const base = { deliveryDate: '2026-06-24', panelId: 'kyl-and-frys', orderNumbers: ['900001'] };
+  const stale = await request(enabled, endpoint, { method: 'POST',
+    body: JSON.stringify({ ...base, documentVersions: { '900001': { name: 'wrong.pdf' } } }) });
+  assert.equal(stale.status, 409);
+  assert.match((await stale.json()).error, /changed/);
+  const missing = await request(enabled, endpoint, { method: 'POST',
+    body: JSON.stringify({ ...base, documentVersions: {} }) });
+  assert.equal(missing.status, 409);
+  const wrongPanel = await request(enabled, endpoint, { method: 'POST',
+    body: JSON.stringify({ ...base, panelId: 'dsv-finland' }) });
+  assert.equal(wrongPanel.status, 400);
+
+  const readOnly = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_READ_ONLY: 'true', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true'
+  });
+  assert.equal((await request(readOnly, endpoint, { method: 'POST', body: JSON.stringify(base) })).status, 403);
+  const loginRequired = await createAuthHandler(t, { PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true' });
+  assert.equal((await request(loginRequired, endpoint, { method: 'POST', body: JSON.stringify(base) })).status, 401);
+});
+
+test('Kyl manual status accepts an existing PDF even without a booking number', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-manual-no-booking-test-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  const context = contexts.find((item) => item.orderNumber === '900001');
+  context.freightConsignmentFresh = '';
+  context.freightConsignmentFrozen = '';
+  context.freightConsignmentNumbers = [];
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    VISIBLE_DOCUMENT_TYPES: 'pallet,packingSlip,attachment,freight', MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const before = await (await request(handler, '/api/dashboard/freight?deliveryDate=2026-06-24')).json();
+  const item = before.panels['kyl-and-frys'].orders.find(({ order }) => order.orderNumber === '900001');
+  assert.equal(item.bookings.length, 0);
+  const document = item.order.documents.pallet;
+  const marked = await request(handler, '/api/dashboard/freight-mark-printed', { method: 'POST',
+    body: JSON.stringify({ deliveryDate: '2026-06-24', panelId: 'kyl-and-frys', orderNumbers: ['900001'],
+      documentVersions: { '900001': { name: document.name, source: document.source,
+        generation: document.generation, updated: document.updated } } }) });
+  assert.equal(marked.status, 200);
+  assert.equal((await marked.json()).count, 1);
 });
 
 async function openEventStream(handler, pathOrUrl, options = {}) {

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -30,6 +30,26 @@ function emptyState() {
 
 function safeUser(user) {
   return String(user || 'operator').trim().slice(0, 80) || 'operator';
+}
+
+function manualPrintEvent(document, user, now) {
+  const identity = [document.orderNumber, document.type, document.source || 'primary',
+    document.name, document.generation || '', document.updated || ''];
+  return {
+    id: `manual-${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}`,
+    jobId: '',
+    orderNumber: String(document.orderNumber),
+    documentType: document.type,
+    source: document.source || 'primary',
+    objectName: document.name,
+    generation: document.generation || null,
+    objectUpdated: document.updated || null,
+    printedAt: now,
+    printedBy: safeUser(user),
+    printerName: '',
+    method: 'manual',
+    status: 'printed'
+  };
 }
 
 // A failed Windows batch may already have sent earlier sections to the spooler.
@@ -297,6 +317,22 @@ export class StateStore {
       return structuredClone(job);
     });
   }
+
+  async markDocumentsPrinted(documents, user) {
+    const now = new Date().toISOString();
+    return this.update((state) => {
+      const existing = new Set(state.printEvents.map((event) => event.id));
+      const marked = [];
+      for (const document of documents) {
+        const event = manualPrintEvent(document, user, now);
+        if (existing.has(event.id)) continue;
+        state.printEvents.push(event);
+        existing.add(event.id);
+        marked.push(event.orderNumber);
+      }
+      return marked;
+    });
+  }
 }
 
 export class DatastoreStateStore {
@@ -547,6 +583,29 @@ export class DatastoreStateStore {
       }
 
       return structuredClone(job);
+    });
+  }
+
+  async markDocumentsPrinted(documents, user) {
+    const now = new Date().toISOString();
+    return this.update(async () => {
+      const marked = [];
+      for (let start = 0; start < documents.length; start += 25) {
+        const events = documents.slice(start, start + 25).map((document) => manualPrintEvent(document, user, now));
+        const existing = await Promise.all(events.map((event) => this.getEntity(STORE_KINDS.printEvent, event.id)));
+        const fresh = events.filter((_event, index) => !existing[index]);
+        await Promise.all(fresh.map((event) => this.saveEntity(STORE_KINDS.printEvent, event.id, event, [
+          ['jobId', event.jobId],
+          ['orderNumber', event.orderNumber],
+          ['documentType', event.documentType],
+          ['source', event.source],
+          ['objectName', event.objectName],
+          ['printedAt', event.printedAt],
+          ['status', event.status]
+        ])));
+        marked.push(...fresh.map((event) => event.orderNumber));
+      }
+      return marked;
     });
   }
 }

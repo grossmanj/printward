@@ -241,6 +241,12 @@ export function ownVehicleSourceForContext(context = {}) {
   return REGISTRATION_TEXT.test(name) ? 'registration-text' : null;
 }
 
+export function registrationForOwnVehicleContext(context = {}) {
+  if (!ownVehicleSourceForContext(context)) return null;
+  const match = String(context.deliveryMethodName || '').trim().match(REGISTRATION_TEXT);
+  return match ? match[1].toUpperCase().replace(/\s+/g, ' ') : null;
+}
+
 export function dispatchSlotForContext(context = {}) {
   const hour = Number(context.dispatchPriority);
   if (!Number.isInteger(hour) || hour <= 0) return null;

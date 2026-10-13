@@ -205,6 +205,61 @@ export async function extractPdfPages(body, selection) {
   return extractPdfPageIndices(sourceBody, indices);
 }
 
+// Visma's verified Följesedel NettoNetto(2050/2101) forms print the transport value
+// in a fixed field. The source object is never changed: only a job-authorized
+// download receives the registration captured from the current order context.
+export async function stampVismaPackingSlipRegistration(body, registration) {
+  const normalized = String(registration || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!/^[A-Z]{3} [A-Z0-9]{3}$/.test(normalized)) {
+    throw new Error('A verified vehicle registration is required for the packing slip.');
+  }
+
+  const pdfLib = await import('pdf-lib');
+  const pdf = await pdfLib.PDFDocument.load(Buffer.isBuffer(body) ? body : Buffer.from(body));
+  if (!/Följesedel NettoNetto\((?:2050|2101)\)/i.test(pdf.getTitle() || '')) {
+    throw new Error('The packing slip is not a verified Visma form (2050 or 2101).');
+  }
+
+  const font = await pdf.embedFont(pdfLib.StandardFonts.TimesRoman);
+  let stamped = 0;
+  for (let index = 0; index < pdf.getPageCount(); index += 1) {
+    const page = pdf.getPage(index);
+    const { width, height } = page.getSize();
+    if (Math.abs(width - 593.7943) > 1 || Math.abs(height - 840.4407) > 1) {
+      throw new Error('The packing slip page size differs from the verified Visma form.');
+    }
+
+    const contents = extractPdfPageText(pdf, index, pdfLib);
+    const draws = [...contents.matchAll(/(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Tm[\s\S]{0,120}?\[\(([^()]*)\)\]\s+TJ/g)]
+      .map((match) => ({ x: Number(match[1]), y: Number(match[2]), text: match[3] }));
+    const label = draws.find(({ x, y, text }) =>
+      text === 'Transportsätt' && Math.abs(x - 316.5165) < 1 && Math.abs(y - 277.021) < 1);
+    const value = draws.find(({ x, y, text }) =>
+      text && Math.abs(x - 316.5165) < 1 && Math.abs(y - 291.1942) < 1);
+    if (!label || !value) {
+      throw new Error('The packing slip transport field could not be verified.');
+    }
+
+    page.drawRectangle({
+      x: 314.022,
+      y: height - 294.7182,
+      width: 104.882,
+      height: 11.878,
+      color: pdfLib.rgb(1, 1, 1)
+    });
+    page.drawText(normalized, {
+      x: 316.5165,
+      y: height - 291.1942,
+      size: 10,
+      font,
+      color: pdfLib.rgb(0, 0, 0)
+    });
+    stamped += 1;
+  }
+  if (stamped === 0) throw new Error('The packing slip has no pages.');
+  return Buffer.from(await pdf.save());
+}
+
 function boolFromQuery(value) {
   return ['1', 'true', 'yes'].includes(String(value || '').toLowerCase());
 }

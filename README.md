@@ -114,6 +114,28 @@ events, with remaining/missing-document counts underneath;
 the three status groups add up to the total. Registered printed means that
 both documents have Printward print events, not proof of physical paper.
 
+The Kyl & Frys lookup also supports **Markera som utskrivna** for selected
+orders already printed outside Printward. This records the current freight PDF
+generation as manually printed without creating a print job or contacting the
+local agent. Orders without a booking number can be marked when their freight
+PDF exists; orders without a PDF cannot. The overview count refreshes after
+marking. A replaced PDF returns to reprint-needed status. Marking applies to
+the order's whole freight PDF, not one chilled/frozen booking.
+
+For own-car orders whose current **order** `DelMt` resolves to a vehicle
+registration, Printward captures that registration when it creates a print
+job. Its agent download stamps the registration over the transport value in
+the stored Visma packing-slip PDF; the original GCS PDF and the partibilaga
+are unchanged. This is needed because a PDF generated before rerouting can
+still show the customer's old delivery method even when current Visma/Printward
+shows the vehicle. The replacement is deliberately limited to visually
+verified Visma `Följesedel NettoNetto` forms 2050 and 2101 with the expected
+transport-field position and A4 page size. Unknown layouts fail closed rather
+than printing a potentially wrong route. A plain PDF preview still shows the
+original source document; only a job-authorized download is stamped. A print
+job captures the order's current registration at creation, so retrying that
+job preserves the original snapshot; create a new job after a later reroute.
+
 The dashboard now polls the selected date every two minutes while its browser
 tab is visible. Background polling waits for an expired server order cache to
 finish rebuilding instead of showing its previous value; concurrent dashboard

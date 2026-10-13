@@ -14,7 +14,8 @@ import {
   createCenteredTextPdf,
   extractKylFreightSection,
   extractPdfPages,
-  repeatPdfPages
+  repeatPdfPages,
+  stampVismaPackingSlipRegistration
 } from './pdf.js';
 import {
   DOCUMENT_ORDER,
@@ -30,7 +31,7 @@ import {
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore, summarizeJobProgress } from './stateStore.js';
-import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
+import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, registrationForOwnVehicleContext, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -426,6 +427,17 @@ function jobIncludesDocument(job, name, source, generation = '') {
   });
 }
 
+function findJobDocument(job, name, source, generation = '') {
+  for (const order of job?.orders || []) {
+    for (const document of order.documents || []) {
+      if (document.name === name
+        && (document.source || 'primary') === source
+        && String(document.generation || '') === String(generation || '')) return document;
+    }
+  }
+  return null;
+}
+
 function isSeparatorOrder(order) {
   return Boolean(order?.isSeparator);
 }
@@ -740,10 +752,23 @@ async function buildPrintSnapshots(storage, orders, selectedTypes, options = {})
   const printableOrders = orders.filter(Boolean);
   await annotateKylPalletLabelPages(storage, printableOrders);
 
+  const registrations = new Map(printableOrders.map((order) => [
+    String(order.orderNumber), registrationForOwnVehicleContext(order.context)
+  ]));
+  const addCurrentRegistration = (snapshots) => snapshots.map((snapshot) => ({
+    ...snapshot,
+    documents: snapshot.documents.map((document) => {
+      const registration = registrations.get(String(snapshot.orderNumber));
+      return document.type === 'packingSlip' && registration
+        ? { ...document, routeRegistration: registration }
+        : document;
+    })
+  }));
+
   if (!options.includeComboSeparators) {
-    return printableOrders
+    return addCurrentRegistration(printableOrders
       .flatMap((order) => orderToPrintSnapshots(order, documentTypesForPrintOrder(order, selectedTypes)))
-      .filter((order) => order.documents.length > 0);
+      .filter((order) => order.documents.length > 0));
   }
 
   const groups = [];
@@ -771,7 +796,7 @@ async function buildPrintSnapshots(storage, orders, selectedTypes, options = {})
     snapshots.push(...orderSnapshots);
   });
 
-  return snapshots;
+  return addCurrentRegistration(snapshots);
 }
 
 function includeRequiredDocumentTypes(selectedTypes, orders) {
@@ -1300,6 +1325,63 @@ async function handleApi(req, res, requestUrl, context) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/dashboard/freight-mark-printed') {
+    if (!config.dashboardPrintingEnabled) {
+      sendJson(res, 403, { error: 'Dashboard printing is not enabled on this service.' });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const deliveryDate = String(body.deliveryDate || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate) || body.panelId !== 'kyl-and-frys') {
+      sendJson(res, 400, { error: 'A valid delivery date and Kyl & Frys group are required.' });
+      return;
+    }
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, {
+      deliveryDate,
+      refresh: true
+    });
+    if (contextStatus?.available === false) {
+      sendJson(res, 503, { error: 'The order source is unavailable; print status cannot be changed.' });
+      return;
+    }
+    const plan = planFreightDocumentSelection(filterOrders(orders, { deliveryDate }), body.panelId, body.orderNumbers);
+    if (!plan.valid) {
+      sendJson(res, 409, { error: 'The freight selection is no longer valid.', errors: plan.errors });
+      return;
+    }
+    const versions = body.documentVersions;
+    if (!versions || typeof versions !== 'object' || Array.isArray(versions)) {
+      sendJson(res, 400, { error: 'Current document versions are required.' });
+      return;
+    }
+    const byNumber = new Map(orders.map((order) => [String(order.orderNumber), order]));
+    const documents = [];
+    const alreadyPrinted = [];
+    for (const item of plan.orders) {
+      const document = byNumber.get(item.orderNumber)?.documents?.[item.document.type];
+      const expected = versions[item.orderNumber];
+      if (!expected || typeof expected !== 'object'
+        || String(expected.name || '') !== String(document?.name || '')
+        || String(expected.source || 'primary') !== String(document?.source || 'primary')
+        || String(expected.generation || '') !== String(document?.generation || '')
+        || String(expected.updated || '') !== String(document?.updated || '')) {
+        sendJson(res, 409, { error: `Order ${item.orderNumber} has changed. Refresh before marking it printed.` });
+        return;
+      }
+      if (document.printStatus === 'printed') {
+        alreadyPrinted.push(item.orderNumber);
+        continue;
+      }
+      documents.push({ orderNumber: item.orderNumber, type: item.document.type,
+        name: document.name, source: document.source, generation: document.generation, updated: document.updated });
+    }
+    const marked = await store.markDocumentsPrinted(documents, body.user);
+    invalidateOrdersCache(ordersCache);
+    eventHub.broadcast('freight-print-status-updated', { orderNumbers: marked, method: 'manual' });
+    sendJson(res, 200, { marked, alreadyPrinted, count: marked.length });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/dashboard/print-jobs') {
     if (!config.dashboardPrintingEnabled) {
       sendJson(res, 403, { error: 'Dashboard printing is not enabled on this service.' });
@@ -1777,6 +1859,13 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
 
+    const jobId = requestUrl.searchParams.get('jobId') || '';
+    const job = jobId ? await store.getJob(jobId) : null;
+    const jobDocument = findJobDocument(job, name, source, generation);
+    if (jobId && !jobDocument) {
+      sendJson(res, 409, { error: 'The requested document version is not in this print job.' });
+      return;
+    }
     const object = await storage.getObject(name, source, generation);
     const pages = requestUrl.searchParams.get('pages') || '';
     const kylSection = requestUrl.searchParams.get('kylSection') || '';
@@ -1801,6 +1890,11 @@ async function handleApi(req, res, requestUrl, context) {
 
     if (pageCopies > 1) {
       body = await repeatPdfPages(body, pageCopies, copyMode);
+      transformed = true;
+    }
+
+    if (jobDocument?.type === 'packingSlip' && jobDocument.routeRegistration) {
+      body = await stampVismaPackingSlipRegistration(body, jobDocument.routeRegistration);
       transformed = true;
     }
 
