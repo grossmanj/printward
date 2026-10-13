@@ -31,7 +31,7 @@ import {
   summarizeOrders
 } from './documents.js';
 import { buildPrintIndex, createStateStore, summarizeJobProgress } from './stateStore.js';
-import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, registrationForOwnVehicleContext, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
+import { freightPanelForOrder, pickupPrintStateForOrder, planDashboardPrintSelection, planFreightDocumentSelection, registrationForOwnVehicleContext, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -875,7 +875,7 @@ function invalidateOrdersCache(cache) {
 }
 
 function ordersCacheKey(options = {}) {
-  return options.deliveryDate ? `deliveryDate:${options.deliveryDate}` : 'all';
+  return options.deliveryDate ? `${options.scope === 'pickups' ? 'pickups' : 'deliveryDate'}:${options.deliveryDate}` : 'all';
 }
 
 function getOrdersCacheEntry(cache, key) {
@@ -992,13 +992,13 @@ async function listExpectedObjects(storage, config, orderNumbers) {
   return objects.filter(Boolean);
 }
 
-async function buildDateScopedOrders(storage, store, orderContext, config, deliveryDate) {
+async function buildDateScopedOrders(storage, store, orderContext, config, deliveryDate, scope = 'orders') {
   if (!deliveryDate || !orderContext || typeof orderContext.getByDeliveryDate !== 'function') {
     return null;
   }
 
   const [contextByOrderNumber, state] = await Promise.all([
-    orderContext.getByDeliveryDate(deliveryDate),
+    scope === 'pickups' ? orderContext.getPickupsByDeliveryDate(deliveryDate) : orderContext.getByDeliveryDate(deliveryDate),
     store.getState()
   ]);
   const orderNumbers = Array.from(contextByOrderNumber.keys());
@@ -1039,7 +1039,7 @@ async function buildCurrentOrders(storage, store, orderContext, config, options 
 
   if (options.deliveryDate) {
     try {
-      const dateScoped = await buildDateScopedOrders(storage, store, orderContext, config, options.deliveryDate);
+      const dateScoped = await buildDateScopedOrders(storage, store, orderContext, config, options.deliveryDate, options.scope);
       if (dateScoped) return dateScoped;
     } catch (error) {
       return {
@@ -1395,6 +1395,7 @@ async function handleApi(req, res, requestUrl, context) {
     }
     const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, {
       deliveryDate,
+      scope: body.kind === 'pickup' ? 'pickups' : 'orders',
       refresh: true
     });
     if (contextStatus?.available === false) {
@@ -1501,10 +1502,13 @@ async function handleApi(req, res, requestUrl, context) {
 
   if (req.method === 'GET' && pathname === '/api/pickups') {
     const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
-    const pickupContexts = await orderContext.getPickupsByDeliveryDate(deliveryDate);
+    const refreshOptions = orderRefreshOptions(requestUrl);
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, {
+      ...refreshOptions, deliveryDate, scope: 'pickups'
+    });
     sendJson(res, 200, {
-      ...summarizePickups(Array.from(pickupContexts.values())),
-      contextStatus: await orderContext.health()
+      ...summarizePickups(orders.map((order) => ({ ...order.context, ...pickupPrintStateForOrder(order) }))),
+      contextStatus
     });
     return;
   }

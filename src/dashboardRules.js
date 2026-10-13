@@ -207,12 +207,25 @@ export function requiresCashInvoice(context = {}) {
   return Number(context.orderPaymentTerm) === 1;
 }
 
+export function pickupPrintStateForOrder(order = {}) {
+  const context = order.context || order;
+  const cashInvoiceRequired = requiresCashInvoice(context);
+  const slip = order.documents?.packingSlip;
+  const attachment = order.documents?.attachment;
+  const printed = !cashInvoiceRequired && Boolean(slip && attachment
+    && slip.printStatus === 'printed' && attachment.printStatus === 'printed');
+  const ready = !cashInvoiceRequired && !printed && Boolean(slip && attachment)
+    && !Boolean(order.packingBlocked || context.packingBlocked);
+  return { cashInvoiceRequired, printed, ready };
+}
+
 export function summarizePickups(contexts = []) {
   const pickups = contexts
     .map((context) => ({
       ...context,
       pickupKind: pickupKindForContext(context),
       staffOrder: Number(context.deliveryMethod) === 6 && Number(context.customerChainNo) === 60,
+      cashInvoiceRequired: requiresCashInvoice(context),
       swishPayment: requiresCashInvoice(context) && Number(context.deliveryMethod) === 6
     }))
     .filter((context) => context.pickupKind)
@@ -364,6 +377,11 @@ export function planDashboardPrintSelection(orders = [], kind, panelId, orderNum
     ? summarizeOwnDispatch(orders).slots[panelId]?.orders
     : kind === 'chain'
       ? summarizeChainPanels(orders)[panelId]?.orders
+      : kind === 'pickup' && ['pickups', 'staff'].includes(panelId)
+        ? orders.filter((order) => pickupKindForContext(order.context)
+          && (panelId !== 'staff' || Number(order.context?.deliveryMethod) === 6
+            && Number(order.context?.customerChainNo) === 60))
+          .map((order) => ({ order, ready: pickupPrintStateForOrder(order).ready }))
       : null;
   if (!items) return { valid: false, errors: ['Unknown print group.'], orders: [] };
 
@@ -377,10 +395,10 @@ export function planDashboardPrintSelection(orders = [], kind, panelId, orderNum
     const documents = [order.documents?.packingSlip, order.documents?.attachment];
     if (requiresCashInvoice(order.context)) {
       errors.push(`Order ${order.orderNumber} requires Visma invoice form 365; packing slips are blocked.`);
+    } else if (documents.every((document) => document?.printStatus === 'printed')) {
+      errors.push(`Order ${order.orderNumber} is already printed.`);
     } else if (!ready || documents.some((document) => !document)) {
       errors.push(`Order ${order.orderNumber} is not ready with both required documents.`);
-    } else if (documents.every((document) => document.printStatus === 'printed')) {
-      errors.push(`Order ${order.orderNumber} is already printed.`);
     }
   }
   if (errors.length) return { valid: false, errors, orders: [] };

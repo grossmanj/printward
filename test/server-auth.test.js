@@ -147,6 +147,52 @@ test('dashboard print endpoint requires an explicit feature flag and a fresh eli
   assert.equal(payload.job.notes, 'Dashboard dispatch: early (2026-06-25)');
 });
 
+test('pickup dashboard exposes print readiness and only creates non-cash slip jobs', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-pickup-test-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  const pickup = contexts.find((context) => context.orderNumber === '1001');
+  const courier = contexts.find((context) => context.orderNumber === '1002');
+  const taxi = contexts.find((context) => context.orderNumber === '1004');
+  pickup.deliveryMethod = 6;
+  pickup.orderPaymentTerm = 2;
+  courier.deliveryMethod = 16;
+  courier.deliveryDate = '2026-06-25';
+  courier.orderPaymentTerm = 1;
+  taxi.deliveryMethod = 44;
+  taxi.orderPaymentTerm = 2;
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const pickupResponse = await request(handler, '/api/pickups?deliveryDate=2026-06-25');
+  assert.equal(pickupResponse.status, 200);
+  const { pickups } = await pickupResponse.json();
+  assert.equal(pickups.find((item) => item.orderNumber === '1001').ready, true);
+  assert.equal(pickups.find((item) => item.orderNumber === '1002').cashInvoiceRequired, true);
+  assert.equal(pickups.find((item) => item.orderNumber === '1002').ready, false);
+  assert.equal(pickups.find((item) => item.orderNumber === '1004').ready, true);
+
+  const body = (orderNumbers, panelId = 'pickups') => JSON.stringify({
+    kind: 'pickup', panelId, deliveryDate: '2026-06-25', orderNumbers
+  });
+  const cash = await request(handler, '/api/dashboard/print-jobs', { method: 'POST', body: body(['1002']) });
+  assert.equal(cash.status, 409);
+  assert.match((await cash.json()).errors[0], /invoice form 365/);
+  const unrelated = await request(handler, '/api/dashboard/print-jobs', { method: 'POST', body: body(['1001'], 'staff') });
+  assert.equal(unrelated.status, 409);
+  const created = await request(handler, '/api/dashboard/print-jobs', { method: 'POST', body: body(['1001', '1004']) });
+  assert.equal(created.status, 201);
+  const { manifest, job } = await created.json();
+  assert.deepEqual(manifest.orders.map((order) => order.documents.map((document) => document.type)), [
+    ['packingSlip', 'attachment'], ['packingSlip', 'attachment']
+  ]);
+  assert.equal(job.notes, 'Dashboard pickup: pickups (2026-06-25)');
+});
+
 test('own-car manifest captures the current order registration and fails closed for an unknown slip form', async (t) => {
   const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-route-stamp-test-'));
   t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));

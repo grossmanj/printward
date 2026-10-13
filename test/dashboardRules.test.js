@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
+import { dispatchSlotForContext, freightBookingsForContext, freightPanelForOrder, ownVehicleSourceForContext, pickupKindForContext, pickupPrintStateForOrder, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, returnDepartureForContext, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from '../src/dashboardRules.js';
 
 test('dashboard print plan rejects wrong groups, unfinished slips, and already printed freight', () => {
   const slip = (printStatus = 'pending') => ({ name: 'slip.pdf', type: 'packingSlip', printStatus });
@@ -197,8 +197,35 @@ test('pickup summary separates customer, courier and taxi and marks only custome
   assert.deepEqual(summary, { total: 4, customer: 2, staff: 0, courier: 1, taxi: 1, swish: 1 });
   assert.equal(pickups[0].swishPayment, true);
   assert.equal(pickups[1].swishPayment, false);
+  assert.equal(pickups[1].cashInvoiceRequired, true);
   assert.equal(pickups[3].swishPayment, false);
   assert.equal(pickupKindForContext({ deliveryMethod: 46 }), 'taxi');
+});
+
+test('pickup printing requires a complete unprinted slip packet and blocks cash orders across all pickup kinds', () => {
+  const documents = {
+    packingSlip: { printStatus: 'pending' }, attachment: { printStatus: 'pending' }
+  };
+  const pickup = { orderNumber: '1', context: { deliveryMethod: 6, orderPaymentTerm: 2 }, documents };
+  const courier = { orderNumber: '2', context: { deliveryMethod: 16, orderPaymentTerm: 1 }, documents };
+  const taxi = { orderNumber: '3', context: { deliveryMethod: 44, orderPaymentTerm: 2 }, documents };
+  const incomplete = { orderNumber: '4', context: { deliveryMethod: 42, orderPaymentTerm: 2 }, documents: { packingSlip: documents.packingSlip } };
+  const printed = { orderNumber: '5', context: { deliveryMethod: 6, orderPaymentTerm: 2 }, documents: {
+    packingSlip: { printStatus: 'printed' }, attachment: { printStatus: 'printed' }
+  } };
+  const otherRoute = { orderNumber: '6', context: { deliveryMethod: 12 }, documents };
+  const orders = [pickup, courier, taxi, incomplete, printed, otherRoute];
+
+  assert.deepEqual(pickupPrintStateForOrder(pickup), { cashInvoiceRequired: false, printed: false, ready: true });
+  assert.equal(pickupPrintStateForOrder(courier).ready, false);
+  assert.equal(pickupPrintStateForOrder(incomplete).ready, false);
+  assert.equal(pickupPrintStateForOrder(printed).printed, true);
+  assert.equal(planDashboardPrintSelection(orders, 'pickup', 'pickups', ['1', '3']).valid, true);
+  assert.match(planDashboardPrintSelection(orders, 'pickup', 'pickups', ['2']).errors[0], /invoice form 365/);
+  assert.match(planDashboardPrintSelection(orders, 'pickup', 'pickups', ['4']).errors[0], /not ready/);
+  assert.match(planDashboardPrintSelection(orders, 'pickup', 'pickups', ['5']).errors[0], /already printed/);
+  assert.match(planDashboardPrintSelection(orders, 'pickup', 'pickups', ['6']).errors[0], /does not belong/);
+  assert.equal(planDashboardPrintSelection(orders, 'pickup', 'staff', ['1']).valid, false);
 });
 
 test('personal orders are identified within customer pickups without double counting', () => {

@@ -87,6 +87,14 @@ couriers (`16`), and taxis (`42`–`46`). A customer pickup whose **order**
 override it. The proposed cash-payment rule applies to **every order**, not
 just pickups: the order-level payment term selects Visma invoice form 365
 (Faktura B&N) plus partibilaga instead of följesedel plus partibilaga.
+Locally staged for the next demo deployment: pickup/courier/taxi orders with
+both existing PDFs and completed packing may use the same verified
+följesedel + partibilaga print job as other orders. The server checks fresh
+pickup-scoped Visma data before creating a job; the browser cannot authorize
+printing on its own. Already printed packets and orders with missing PDFs are
+not offered again. `Ord.PmtTrm=1` blocks this path for every pickup kind,
+including bud and taxi. This change is not active in the deployed demo until
+the next explicitly approved deployment and a physical test.
 For this release, Swish/cash-payment invoices remain in the existing manual
 Visma print routine; Printward must not print or invoice these orders.
 Visma creates the invoice when its invoice printout is approved; Printward
@@ -206,8 +214,9 @@ sequence: **Följesedel → Partibilaga** is marked as a planned stapled bundle;
 freight documents and labels are explicitly separate from packing slips.
 Simulation marks matching documents in own-car and chain views together, while
 real readiness counters stay unchanged. Kyl/DSV/Eriksson simulations require a
-successful read-only PDF preflight. Pickup/courier/staff actions are clearly
-marked as template-unverified intentions, not PDF output. Best Transport, other
+successful read-only PDF preflight. Locally staged pickup/courier/staff
+simulation represents följesedel + partibilaga only when both PDFs are present;
+it never prints or changes real status. Best Transport, other
 carriers, returns, and DocSmt-based customers remain disabled. **Rensa
 simulering** clears only the browser's test queue. Freight cards consistently say **Visa
 avgångar**. Order details provide read-only links to the exact available PDF
@@ -677,11 +686,13 @@ selected orders against fresh Visma context, validates the PDF packet, then
 issues a job-scoped manifest for the agent. The virtual printer remains separate
 and never changes actual print status.
 
-Only verified dashboard groups are printable: own-vehicle Tidig/FM/EM slips
+Only verified dashboard groups in the currently deployed demo are printable: own-vehicle Tidig/FM/EM slips
 with one attachment per order; Sushi Yama and ChopChop slips with attachments;
 and Kyl & Frys, DSV Finland, and Eriksson freight documents/labels without
-slips. Best Transport, other carriers, returns, pickup/courier/taxi, and other
-customers remain view-only until their document rules are verified. For the
+slips. Pickup/courier/taxi printing is staged locally for the next demo
+deployment, but is still view-only on the deployed service. Best Transport,
+other carriers, returns, and other customers remain view-only until their
+document rules are verified. For the
 demo service, keep `PRINTWARD_LEGACY_PRINT_ENABLED=false` so the older generic
 job endpoint cannot bypass these dashboard-specific checks, and keep
 `NSHIFT_FETCH_ENABLED=false` to avoid live nShift calls while testing.

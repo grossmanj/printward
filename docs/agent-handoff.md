@@ -1512,5 +1512,37 @@ are verification needs, not claims that the running system is broken.
   stamped to a temporary copy, rendered, and visually checked; `PST 18A`
   appeared in the intended field and the stored source was untouched.
   Regression fixtures cover form 2551 and reject a non-Visma origin. The full
-  Node test suite and `git diff --check` passed locally. This is repository
-  state only until a separate demo push and deployment are confirmed.
+  Node test suite and `git diff --check` passed locally. Commit
+  `655105436eb6ed2dac05a2c388830c0050075973` was pushed to `origin/demo`
+  and its remote SHA verified. Cloud Build `19444f5a` succeeded; Cloud Run
+  revision `printward-demo-00043-xpm` was healthy and serving 100% of traffic
+  at 12:51 Stockholm time. No production, Windows-agent, nShift, or scheduler
+  update was made. The owner subsequently tested order 1993900 on W10 and
+  confirmed that the packing slip and partibilaga printed together with the
+  correct vehicle registration. This verifies that order's paper path, not
+  every possible Visma export layout or a resumed multi-order batch.
+
+### 2026-10-13 pickup, courier and taxi print path (local, not deployed)
+
+- The owner reported that the Hämtningar, bud & taxi print buttons were still
+  disabled and asked to stage a fix for the next deployment. All non-cash
+  pickup, courier and taxi orders should use the ordinary följesedel +
+  partibilaga packet when both current PDFs exist and packing is complete.
+  Orders with `Ord.PmtTrm=1` remain on the manual Visma invoice routine,
+  regardless of whether the delivery method is pickup, courier or taxi.
+- The pickup endpoint now builds pickup-scoped orders with PDF generation and
+  print status, using a separate cache key from normal dispatch. The server
+  re-reads the pickup scope before creating a job and rejects cash orders,
+  missing/incomplete packets, already printed packets and orders outside the
+  selected pickup/staff group. The browser offers real printing and virtual
+  simulation only for ready orders, refreshes pickup status after a print job,
+  and keeps the existing Print Agent confirmation and recovery flow.
+- Focused rule and API tests cover eligible pickup/taxi packets, cash courier
+  exclusion, staff-group isolation, manifest document order and visible ready
+  state. The Node test suite and `git diff --check` passed locally. No live
+  Visma, nShift, Windows-agent or physical-printer test was performed. This
+  change has not been pushed or deployed; verify at least one non-cash pickup
+  and one courier/taxi paper packet after the next approved demo deployment.
+  The automatic freight-print scheduler is still only a requirement, not an
+  enabled job. Its lack of pending-job deduplication and a cloud-to-local-agent
+  path must be addressed separately before scheduling printing.

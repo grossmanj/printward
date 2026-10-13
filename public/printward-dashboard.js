@@ -303,7 +303,7 @@ async function sendManifestToAgent(manifest, defaults) {
 }
 
 async function refreshAfterPrint() {
-  await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
+  await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true), loadPickupDashboard(true)]);
   if (statuses[activeView]) await loadOrders(activeView, true);
 }
 
@@ -1290,20 +1290,34 @@ async function loadReturnDashboard(refresh = false, background = false) {
 
 const pickupKindLabels = { customer: 'Kundhämtning', courier: 'Budbil', taxi: 'Taxi' };
 function pickupCandidate(context) {
-  return simulated(context.orderNumber, 'pickup') ? []
-    : [{ deliveryDate: deliveryDate.value, orderNumber: String(context.orderNumber), type: 'pickup' }];
+  if (!context.ready || context.cashInvoiceRequired) return [];
+  return ['packingSlip', 'attachment']
+    .filter((type) => !simulated(context.orderNumber, type))
+    .map((type) => ({ deliveryDate: deliveryDate.value, orderNumber: String(context.orderNumber), type }));
 }
 function simulatePickup(context) {
   openVirtualPrint(`Hämtning/bud/taxi · order ${context.orderNumber}`, pickupCandidate(context),
-    context.swishPayment
-      ? 'Swish/kontant: fakturan skrivs tills vidare ut direkt från Visma. Printward simulerar bara detta steg.'
-      : 'Dokumentmallen är inte verifierad; endast utskriftssteget simuleras.');
+    'Virtuellt test av följesedel och partibilaga; inga papper skickas till skrivaren.');
+}
+function printPickup(context) {
+  if (simulationEnabled) simulatePickup(context);
+  else printDashboardItems('pickup', 'pickups', `Hämtning/bud/taxi · order ${context.orderNumber}`, [context]);
+}
+function pickupStatusLabel(context) {
+  if (context.cashInvoiceRequired) return 'Kontantorder · faktura skrivs i Visma';
+  if (context.printed) return 'Registrerat utskriven';
+  if (context.ready) return 'Klar för utskrift';
+  return 'Följesedel, partibilaga eller packning saknas';
+}
+function pickupPrintButton(context) {
+  const printable = pickupCandidate(context).length > 0;
+  return `<button class="quick-print" data-print-pickup="${escapeHtml(context.orderNumber)}" type="button" ${(simulationEnabled || realPrintingEnabled) && printable && !activeRealPrint ? '' : 'disabled'} title="${escapeHtml(pickupStatusLabel(context))}">${simulationEnabled ? 'Simulera' : 'Skriv ut'}</button>`;
 }
 
 function openPickupDetails(context) {
   title.textContent = `Order ${context.orderNumber}`;
-  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Leveranssätt</dt><dd>${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || '–')} (${escapeHtml(context.deliveryMethod || '–')})</dd><dt>Tid enligt order</dt><dd>${escapeHtml(context.dispatchTime || 'Ej angiven')}</dd><dt>Betalning</dt><dd>${context.swishPayment ? 'Swish betalning vid hämtning' : 'Ingen Swish-markering'}</dd><dt>Utskrift</dt><dd>${context.swishPayment ? 'Faktura skrivs tills vidare direkt från Visma' : 'Dokumentmall ej verifierad'}</dd><dt>Teststatus</dt><dd>${simulated(context.orderNumber, 'pickup') ? 'Simulerat utskriven · inte på riktigt' : 'Ej simulerad'}</dd></dl><button class="quick-print" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
-  detail.querySelector('.quick-print').addEventListener('click', () => { dialog.close(); simulatePickup(context); });
+  detail.innerHTML = `<dl><dt>Kund</dt><dd>${escapeHtml(context.customerName || context.deliveryName || '–')}</dd><dt>Leveransdatum</dt><dd>${escapeHtml(context.deliveryDate || '–')}</dd><dt>Leveranssätt</dt><dd>${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || '–')} (${escapeHtml(context.deliveryMethod || '–')})</dd><dt>Tid enligt order</dt><dd>${escapeHtml(context.dispatchTime || 'Ej angiven')}</dd><dt>Betalning</dt><dd>${context.cashInvoiceRequired ? 'Kontant/Swish · faktura i Visma' : 'Ej kontantorder'}</dd><dt>Utskrift</dt><dd>${escapeHtml(pickupStatusLabel(context))}</dd></dl><button class="quick-print" type="button" ${(simulationEnabled || realPrintingEnabled) && pickupCandidate(context).length && !activeRealPrint ? '' : 'disabled'}>${simulationEnabled ? 'Simulera utskrift' : 'Skriv ut order'}</button>`;
+  detail.querySelector('.quick-print').addEventListener('click', () => { dialog.close(); printPickup(context); });
   dialog.showModal();
 }
 
@@ -1315,11 +1329,12 @@ function renderPickupCard(payload) {
   document.querySelector('#pickupCount').textContent = available ? payload.summary?.total ?? pickups.length : '–';
   const preview = ordinaryPickups.slice(0, 3).map((context) => {
     const kind = context.pickupKind;
-    return `<div class="pickup-item"><button class="pickup-row" data-pickup-order="${escapeHtml(context.orderNumber)}" aria-label="Visa order ${escapeHtml(context.orderNumber)}"><strong>${escapeHtml(context.customerName || context.deliveryName || `Order ${context.orderNumber}`)}</strong><span class="pill ${kind === 'customer' ? 'pickup' : 'courier'}">${escapeHtml(pickupKindLabels[kind] || 'Okänt')}</span>${context.swishPayment ? '<span class="pill swish">Swish betalning</span>' : ''}${simulated(context.orderNumber, 'pickup') ? '<span class="pill virtual-pill">Simulerat</span>' : ''}</button><button class="quick-print" data-sim-pickup="${escapeHtml(context.orderNumber)}" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera' : 'Skriv ut'}</button></div>`;
+    return `<div class="pickup-item"><button class="pickup-row" data-pickup-order="${escapeHtml(context.orderNumber)}" aria-label="Visa order ${escapeHtml(context.orderNumber)}"><strong>${escapeHtml(context.customerName || context.deliveryName || `Order ${context.orderNumber}`)}</strong><span class="pill ${kind === 'customer' ? 'pickup' : 'courier'}">${escapeHtml(pickupKindLabels[kind] || 'Okänt')}</span>${context.cashInvoiceRequired ? '<span class="pill swish">Kontant · Visma</span>' : ''}${context.printed ? '<span class="pill virtual-pill">Utskriven</span>' : ''}</button>${pickupPrintButton(context)}</div>`;
   }).join('');
+  const staffPrintable = pickups.filter((context) => context.staffOrder && pickupCandidate(context).length);
   const list = document.querySelector('.pickup-list');
   list.innerHTML = available
-    ? `${preview || '<p class="pickup-empty">Inga övriga hämtningar, bud- eller taxiorder för valt datum.</p>'}<div class="pickup-item"><button class="pickup-row staff-row" id="staffOrders" type="button" aria-label="Visa personalorder"><strong>Personalorder</strong><span class="pill staff">Kundhämtning</span><span class="staff-count">${staffCount} order</span></button><button class="quick-print" id="simulateStaff" type="button" ${simulationEnabled && pickups.some((context) => context.staffOrder && pickupCandidate(context).length) ? '' : 'disabled'}>${simulationEnabled ? 'Simulera' : 'Skriv ut'}</button></div>`
+    ? `${preview || '<p class="pickup-empty">Inga övriga hämtningar, bud- eller taxiorder för valt datum.</p>'}<div class="pickup-item"><button class="pickup-row staff-row" id="staffOrders" type="button" aria-label="Visa personalorder"><strong>Personalorder</strong><span class="pill staff">Kundhämtning</span><span class="staff-count">${staffCount} order</span></button><button class="quick-print" id="printStaff" type="button" ${(simulationEnabled || realPrintingEnabled) && staffPrintable.length && staffPrintable.length <= 200 && !activeRealPrint ? '' : 'disabled'}>${simulationEnabled ? 'Simulera' : 'Skriv ut klara'}</button></div>`
     : '<p class="pickup-empty">Orderdata är inte tillgänglig.</p>';
   list.querySelectorAll('[data-pickup-order]').forEach((row) => row.addEventListener('click', () => {
     const context = pickups.find((item) => String(item.orderNumber) === row.dataset.pickupOrder);
@@ -1329,13 +1344,13 @@ function renderPickupCard(payload) {
     navigateToLookup('staff');
     renderPickupList(payload, true);
   });
-  list.querySelectorAll('[data-sim-pickup]').forEach((button) => button.addEventListener('click', () => {
-    const context = pickups.find((item) => String(item.orderNumber) === button.dataset.simPickup);
-    if (context) simulatePickup(context);
+  list.querySelectorAll('[data-print-pickup]').forEach((button) => button.addEventListener('click', () => {
+    const context = pickups.find((item) => String(item.orderNumber) === button.dataset.printPickup);
+    if (context) printPickup(context);
   }));
-  list.querySelector('#simulateStaff')?.addEventListener('click', () => {
-    openVirtualPrint('Personalorder · kundhämtning', pickups.filter((context) => context.staffOrder)
-      .flatMap(pickupCandidate), 'Dokumentmallen är inte verifierad; endast utskriftssteget simuleras.');
+  list.querySelector('#printStaff')?.addEventListener('click', () => {
+    if (simulationEnabled) openVirtualPrint('Personalorder · kundhämtning', staffPrintable.flatMap(pickupCandidate), 'Virtuellt test; inga papper skickas till skrivaren.');
+    else printDashboardItems('pickup', 'staff', 'Personalorder · kundhämtning', staffPrintable);
   });
   const more = document.querySelector('.pickup-more');
   more.textContent = `Visa alla ${pickups.length} order`;
@@ -1352,18 +1367,18 @@ function renderPickupList(payload, onlyStaff = false) {
     context.customerNo, context.customerName, context.deliveryName, context.dispatchTime,
     pickupKindLabels[context.pickupKind], context.staffOrder && 'Personalorder']
     .filter(Boolean).join(' ').toLowerCase().includes(query)));
-  const rows = pickups.map((context) => `<tr data-pickup-order="${escapeHtml(context.orderNumber)}"><td><strong>${escapeHtml(context.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td><span class="pill ${context.staffOrder ? 'staff' : context.pickupKind === 'customer' ? 'pickup' : 'courier'}">${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || 'Okänt')}</span>${context.swishPayment ? ' <span class="pill swish">Swish betalning</span>' : ''}${simulated(context.orderNumber, 'pickup') ? ' <span class="pill virtual-pill">Simulerat utskriven</span>' : ''}</td><td><button class="quick-print" data-sim-pickup="${escapeHtml(context.orderNumber)}" type="button" ${simulationEnabled && pickupCandidate(context).length ? '' : 'disabled'}>${simulationEnabled ? 'Simulera' : 'Skriv ut'}</button></td></tr>`).join('');
+  const rows = pickups.map((context) => `<tr data-pickup-order="${escapeHtml(context.orderNumber)}"><td><strong>${escapeHtml(context.orderNumber)}</strong></td><td>${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td>${escapeHtml(context.dispatchTime || '–')}</td><td><span class="pill ${context.staffOrder ? 'staff' : context.pickupKind === 'customer' ? 'pickup' : 'courier'}">${escapeHtml(context.staffOrder ? 'Personalorder · kundhämtning' : pickupKindLabels[context.pickupKind] || 'Okänt')}</span>${context.cashInvoiceRequired ? ' <span class="pill swish">Kontant · Visma</span>' : ''}</td><td>${escapeHtml(pickupStatusLabel(context))} ${pickupPrintButton(context)}</td></tr>`).join('');
   const heading = onlyStaff ? 'Personalorder' : 'Hämtningar, bud & taxi';
   const count = onlyStaff ? payload.summary?.staff ?? pickups.length : payload.summary?.total ?? pickups.length;
-  ordersView.innerHTML = `<header><div><h1>${heading}</h1><p>${count} order för valt datum. ${onlyStaff ? 'Personalorder är kundhämtningar med Actor.R12 = 60 och Ord.DelMt = 6.' : 'Swish-markeringen kommer från orderns Ord.PmtTrm = 1.'}</p></div><span class="read-only">Endast läsning</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Tid</th><th>Hämtsätt och betalning</th><th>Utskrift</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order för valt datum och sökning.</div>'}`;
+  ordersView.innerHTML = `<header><div><h1>${heading}</h1><p>${count} order för valt datum. Följesedel och partibilaga skrivs ihop när båda finns. Kontantorder skrivs tills vidare ut i Visma.</p></div><span class="read-only">Kontantorder i Visma</span></header>${rows ? `<table class="orders-table"><thead><tr><th>Order</th><th>Kund</th><th>Tid</th><th>Hämtsätt och betalning</th><th>Utskrift</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="orders-empty">Inga order för valt datum och sökning.</div>'}`;
   ordersView.querySelectorAll('[data-pickup-order]').forEach((row) => row.addEventListener('click', () => {
     const context = (payload.pickups || []).find((item) => String(item.orderNumber) === row.dataset.pickupOrder);
     if (context) openPickupDetails(context);
   }));
-  ordersView.querySelectorAll('[data-sim-pickup]').forEach((button) => button.addEventListener('click', (event) => {
+  ordersView.querySelectorAll('[data-print-pickup]').forEach((button) => button.addEventListener('click', (event) => {
     event.stopPropagation();
-    const context = (payload.pickups || []).find((item) => String(item.orderNumber) === button.dataset.simPickup);
-    if (context) simulatePickup(context);
+    const context = (payload.pickups || []).find((item) => String(item.orderNumber) === button.dataset.printPickup);
+    if (context) printPickup(context);
   }));
 }
 
