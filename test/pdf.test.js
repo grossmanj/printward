@@ -14,9 +14,11 @@ import {
   stampVismaPackingSlipRegistration
 } from '../src/pdf.js';
 
-async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pdf', field = true } = {}) {
+async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pdf', field = true, author = 'Visma', creator = 'Visma Business' } = {}) {
   const pdf = await PDFDocument.create();
   pdf.setTitle(title);
+  pdf.setAuthor(author);
+  pdf.setCreator(creator);
   const page = pdf.addPage([593.794276, 840.440741]);
   if (field) {
     const content = [
@@ -49,12 +51,16 @@ test('replaces only the verified Visma slip transport field on the print copy', 
   assert.ok((await stampVismaPackingSlipRegistration(alternate, 'UEJ 64A')).length > 0);
   const latest = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2514).pdf' });
   assert.ok((await stampVismaPackingSlipRegistration(latest, 'PST 18A')).length > 0);
+  const anotherExport = await createVismaSlipFixture({ title: 'C:\\Windows\\TEMP\\9038A.   Följesedel NettoNetto(2551).pdf' });
+  assert.ok((await stampVismaPackingSlipRegistration(anotherExport, 'PST 18A')).length > 0);
 });
 
 test('rejects unverified Visma layouts and invalid registration text', async () => {
   const wrongForm = await createVismaSlipFixture({ title: 'Another form.pdf' });
+  const wrongOrigin = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2551).pdf', author: 'Other software' });
   const missingField = await createVismaSlipFixture({ field: false });
   await assert.rejects(stampVismaPackingSlipRegistration(wrongForm, 'UEJ 64A'), /not a verified Visma form/);
+  await assert.rejects(stampVismaPackingSlipRegistration(wrongOrigin, 'UEJ 64A'), /not a verified Visma form/);
   await assert.rejects(stampVismaPackingSlipRegistration(missingField, 'UEJ 64A'), /transport field could not be verified/);
   await assert.rejects(stampVismaPackingSlipRegistration(await createVismaSlipFixture(), 'SYD'), /verified vehicle registration/);
 });

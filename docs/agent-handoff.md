@@ -1484,6 +1484,33 @@ are verification needs, not claims that the running system is broken.
   the actual order 1993740 PDF was rendered and visually checked with `PST 18A`
   in the correct position. The original source object was not modified.
   Synthetic form-2514 regression coverage was added; the full Node test suite
-  passed (148 tests). This follow-up still requires its own demo deployment and
-  one physical print confirmation; the previous Cloud Run revision remains
-  unchanged until that deployment is verified.
+  passed (148 tests). Commit `1e91dd7477698a6d4ea36bfd769f4390bcc081c0`
+  was pushed to `origin/demo` and its remote SHA verified. Cloud Build
+  `dbbdd6ad-6cfd-40c5-b5bd-3e506135e008` succeeded; Cloud Run
+  `printward-demo` showed the matching image tag, healthy service, and revision
+  `printward-demo-00042-xrm` serving 100% of traffic at 12:41 Stockholm time.
+  The user subsequently confirmed that a paper copy carried `PST 18A`.
+  No production or Windows-agent update was made.
+
+### 2026-10-13 Visma form 2551 print failure (demo follow-up)
+
+- After the successful registration test, a later print job stopped while
+  downloading `order1993900.pdf` with HTTP 500. Cloud Run request logs showed
+  the job creation succeeded but two document downloads failed. Do not restart
+  the whole batch without checking its confirmed progress and the physical
+  stack; earlier orders may already have printed.
+- The stored source PDF for order 1993900 is a one-page Visma A4 packing slip
+  titled `C:\Windows\TEMP\9038A.   Följesedel NettoNetto(2551).pdf` with
+  `Author: Visma` and `Creator: Visma Business`. Its transport field matches
+  the verified coordinates, but the fixed form-number allow-list rejected it.
+  The source shows the old delivery method while current order `DelMt` is
+  `PST 18A`.
+- The stamp now checks Visma metadata, the packing-slip title pattern, A4
+  dimensions, and exact transport-field position without constraining the
+  variable number in the exported filename. It still fails closed if the
+  document origin or layout is not recognized. The actual 1993900 PDF was
+  stamped to a temporary copy, rendered, and visually checked; `PST 18A`
+  appeared in the intended field and the stored source was untouched.
+  Regression fixtures cover form 2551 and reject a non-Visma origin. The full
+  Node test suite and `git diff --check` passed locally. This is repository
+  state only until a separate demo push and deployment are confirmed.

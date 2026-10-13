@@ -129,8 +129,9 @@ the stored Visma packing-slip PDF; the original GCS PDF and the partibilaga
 are unchanged. This is needed because a PDF generated before rerouting can
 still show the customer's old delivery method even when current Visma/Printward
 shows the vehicle. The replacement is deliberately limited to visually
-verified Visma `Följesedel NettoNetto` forms 2050, 2101 and 2514 with the expected
-transport-field position and A4 page size. Unknown layouts fail closed rather
+verified Visma `Följesedel NettoNetto` exports with Visma metadata, the expected
+transport-field position and A4 page size. The number in the exported filename
+varies between jobs and is not an eligibility check. Unknown layouts fail closed rather
 than printing a potentially wrong route. A plain PDF preview still shows the
 original source document; only a job-authorized download is stamped. A print
 job captures the order's current registration at creation, so retrying that
