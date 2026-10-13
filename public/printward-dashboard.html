@@ -14,7 +14,7 @@
 
     <main class="dashboard">
       <section class="toolbar" aria-label="Översikt och filter">
-        <div class="metric"><span>Totalt</span><b id="dashboardTotal">–</b></div>
+        <div class="metric" title="Alla order för valt leveransdatum, även de som inte ingår i en utskriftsgrupp"><span>Alla order</span><b id="dashboardTotal">–</b></div>
         <div class="metric"><span>Pågående plock</span><b id="dashboardPacking">–</b></div>
         <label class="search"><span>⌕</span><input id="dashboardSearch" type="search" placeholder="Sök ort, kund, regnr, rutt eller order" aria-label="Sök ort, kund, registreringsnummer, rutt, order eller bokningsnummer"></label>
         <label class="date"><span>Leveransdatum</span><input id="dashboardDate" type="date"></label>
@@ -41,6 +41,7 @@
       </nav>
 
       <p id="dashboardSource" class="dashboard-source" role="status">Hämtar följesedlar, fraktsedlar, returer, hämtningar och kedjor. Övriga kunder väntar på DocSmt-regeln.</p>
+      <p id="syncStatus" class="sync-status" role="status">Hämtar aktuell översikt…</p>
       <div class="lookup-actions" id="lookupActions" hidden>
         <button class="back-to-dashboard" id="backToDashboard" type="button" aria-label="Stäng uppslag och gå tillbaka till Printward">×&nbsp; Stäng uppslag · tillbaka till Printward</button>
       </div>
@@ -49,20 +50,20 @@
         <article class="panel slips">
           <header><h1>Följesedlar</h1><p>Följesedel + partibilaga häftas ihop per order</p><p id="dispatchCaution" hidden></p></header>
           <div class="dispatch-cards">
-            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="early"><strong>Tidig</strong><time>Före 08:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara för utskrift</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
-            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="morning"><strong>Förmiddag</strong><time>09:00–10:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara för utskrift</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
-            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="afternoon"><strong>Eftermiddag</strong><time>13:00–16:00</time><b><em>–</em> / <span class="dispatch-total">–</span> <small>klara för utskrift</small></b><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="early"><strong>Tidig</strong><time>Senast 08:00</time><b><em>–</em> <small>redo för utskrift av <output class="dispatch-total">–</output> order</small></b><p class="dispatch-status-breakdown"><output class="dispatch-printed">–</output> registrerat utskrivna · <output class="dispatch-not-ready">–</output> ännu inte redo</p><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="morning"><strong>Förmiddag</strong><time>09:00–10:00</time><b><em>–</em> <small>redo för utskrift av <output class="dispatch-total">–</output> order</small></b><p class="dispatch-status-breakdown"><output class="dispatch-printed">–</output> registrerat utskrivna · <output class="dispatch-not-ready">–</output> ännu inte redo</p><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
+            <div class="card-with-print"><button class="dispatch-card" data-dispatch-slot="afternoon"><strong>Eftermiddag</strong><time>Från 13:00</time><b><em>–</em> <small>redo för utskrift av <output class="dispatch-total">–</output> order</small></b><p class="dispatch-status-breakdown"><output class="dispatch-printed">–</output> registrerat utskrivna · <output class="dispatch-not-ready">–</output> ännu inte redo</p><p>Sorterat efter leveransprioritet<br>och körsätt</p><span>Visa order</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut klara</button></div>
           </div>
         </article>
 
         <article class="panel freight">
-          <header><h1>Fraktsedlar</h1><p>Endast fraktdokument — inga följesedlar</p></header>
+          <header><h1>Fraktsedlar</h1><p>Endast fraktdokument — inga följesedlar. Utskriftsstatus avser registrerade utskrifter.</p></header>
           <div class="freight-cards">
-            <div class="card-with-print"><button class="freight-card" data-freight-panel="kyl-and-frys"><strong>Kyl & Frys <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>med dokument</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut alla klara avgångar</button></div>
-            <div class="card-with-print"><button class="freight-card" data-freight-panel="dsv-finland"><strong>DSV Finland <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>med PDF (ej verifierade)</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut kompletta fraktdokument</button></div>
-            <div class="card-with-print"><button class="freight-card" data-freight-panel="best-transport"><strong>Best Transport</strong><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Best Transport saknar utskriftsflöde">Skriv ut alla klara avgångar</button></div>
-            <div class="card-with-print"><button class="freight-card eriksson" data-freight-panel="eriksson"><strong>Eriksson <i hidden>0</i></strong><b><em>–</em> / <span class="freight-total">–</span> <small>med dokument</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Skriv ut alla klara avgångar</button></div>
-            <div class="card-with-print"><button class="freight-card other-carrier" data-freight-panel="other-carriers"><strong>Övriga Åkerier</strong><p>Jansen Logistic<br>Tyskland · rutt 52</p><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Övriga åkerier saknar utskriftsflöde">Skriv ut alla klara avgångar</button></div>
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="kyl-and-frys"><strong>Kyl & Frys <i hidden>0</i></strong><b><em>–</em> av <span class="freight-total">–</span> <small>order utskrivna</small></b><p class="freight-card-note">Utskriftsstatus hämtas…</p><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Kontrollera och skriv ut</button></div>
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="dsv-finland"><strong>DSV Finland <i hidden>0</i></strong><b><em>–</em> av <span class="freight-total">–</span> <small>order utskrivna</small></b><p class="freight-card-note">Utskriftsstatus hämtas…</p><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Kontrollera och skriv ut</button></div>
+            <div class="card-with-print"><button class="freight-card" data-freight-panel="best-transport"><strong>Best Transport</strong><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Best Transport saknar utskriftsflöde">Utskrift ej tillgänglig</button></div>
+            <div class="card-with-print"><button class="freight-card eriksson" data-freight-panel="eriksson"><strong>Eriksson <i hidden>0</i></strong><b><em>–</em> av <span class="freight-total">–</span> <small>order utskrivna</small></b><p class="freight-card-note">Utskriftsstatus hämtas…</p><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Utskrift är spärrad i läsläget">Kontrollera och skriv ut</button></div>
+            <div class="card-with-print"><button class="freight-card other-carrier" data-freight-panel="other-carriers"><strong>Övriga Åkerier</strong><p>Jansen Logistic<br>Tyskland · rutt 52</p><b><em>–</em> <small>avgångar</small></b><span>Visa avgångar</span></button><button class="quick-print" type="button" disabled title="Övriga åkerier saknar utskriftsflöde">Utskrift ej tillgänglig</button></div>
           </div>
         </article>
         </div>
@@ -121,6 +122,13 @@
         <div class="printer-settings-actions"><a href="/install-print-agent.ps1" download="install-print-agent.ps1">Installera Print Agent på Windows</a><button id="testPrintAgent" type="button">Testa agent</button><button class="dialog-button" type="submit">Spara</button></div>
       </form>
     </dialog>
+    <section id="printJobProgress" class="print-job-progress" role="status" aria-live="polite" hidden>
+      <strong>Utskriftskörning</strong>
+      <p id="printJobProgressText">Förbereder utskrift…</p>
+      <progress id="printJobProgressBar" max="1" value="0"></progress>
+      <small>Bekräftat av skrivarkön betyder inte att papperet kommit ut. Kontrollera skrivaren vid stopp.</small>
+      <button id="resumePrintJob" type="button" hidden>Återuppta återstående order</button>
+    </section>
     <div id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/printward-dashboard.js"></script>
   </body>

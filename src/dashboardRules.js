@@ -69,6 +69,8 @@ export function summarizeFreightPanels(orders = []) {
     departureCount: 0,
     ready: 0,
     waiting: 0,
+    printed: 0,
+    missingBooking: 0,
     documentTracking: TRACKED_DOCUMENT_PANELS.has(id),
     orders: []
   }]));
@@ -84,6 +86,9 @@ export function summarizeFreightPanels(orders = []) {
     if (panel.documentTracking) {
       if (documentReady) panel.ready += 1;
       else panel.waiting += 1;
+      if (documentReady && document.printStatus === 'printed') panel.printed += 1;
+      if (!String(order.context?.freightConsignmentFresh || '').trim()
+        && !String(order.context?.freightConsignmentFrozen || '').trim()) panel.missingBooking += 1;
     }
     panel.orders.push({
       order,
@@ -239,15 +244,15 @@ export function ownVehicleSourceForContext(context = {}) {
 export function dispatchSlotForContext(context = {}) {
   const hour = Number(context.dispatchPriority);
   if (!Number.isInteger(hour) || hour <= 0) return null;
-  if (hour < 8) return 'early';
+  if (hour <= 8) return 'early';
   if (hour >= 9 && hour <= 10) return 'morning';
-  if (hour >= 13 && hour <= 16) return 'afternoon';
+  if (hour >= 13 && hour <= 23) return 'afternoon';
   return null;
 }
 
 export function summarizeOwnDispatch(orders = []) {
   const slots = Object.fromEntries(['early', 'morning', 'afternoon'].map((id) => [id, {
-    id, total: 0, ready: 0, waiting: 0, orders: []
+    id, total: 0, ready: 0, printed: 0, waiting: 0, orders: []
   }]));
   const unassigned = [];
   let registrationTextMatches = 0;
@@ -271,6 +276,7 @@ export function summarizeOwnDispatch(orders = []) {
     slot.total += 1;
     if (ready) slot.ready += 1;
     else slot.waiting += 1;
+    if (printed) slot.printed += 1;
     slot.orders.push(item);
   }
   for (const slot of Object.values(slots)) {

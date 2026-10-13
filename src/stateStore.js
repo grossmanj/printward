@@ -32,6 +32,89 @@ function safeUser(user) {
   return String(user || 'operator').trim().slice(0, 80) || 'operator';
 }
 
+// A failed Windows batch may already have sent earlier sections to the spooler.
+// Only a complete order whose every section is in the agent's confirmed prefix
+// can be recorded as printed. An incomplete chilled/frozen order stays pending.
+function validSectionResultCount(job, results) {
+  const sections = job.orders || [];
+  if (!Array.isArray(results) || !results.length || results.length > sections.length) return 0;
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    const section = sections[index];
+    if (!result || result.spoolConfirmed !== true || result.skipped
+      || String(result.orderNumber) !== String(section.orderNumber)) return 0;
+  }
+  return results.length;
+}
+
+function confirmedOrderNumbers(job, input) {
+  const sections = job.orders || [];
+  if (input.status !== 'failed') {
+    return new Set(sections.filter((section) => !section.isSeparator)
+      .map((section) => String(section.orderNumber)));
+  }
+  const count = Math.max(validSectionResultCount(job, input.results),
+    Math.min(sections.length, Math.max(0, Number(job.progress?.completedSections || 0))));
+  if (!count) return new Set();
+  const unfinished = new Set(sections.slice(count)
+    .filter((section) => !section.isSeparator)
+    .map((section) => String(section.orderNumber)));
+  return new Set(sections.slice(0, count)
+    .filter((section) => !section.isSeparator && !unfinished.has(String(section.orderNumber)))
+    .map((section) => String(section.orderNumber)));
+}
+
+function completionFailed(job, input) {
+  return input.status === 'failed'
+    || (String(job.notes || '').startsWith('Dashboard ')
+      && validSectionResultCount(job, input.results) !== (job.orders || []).length)
+    || (Array.isArray(input.results) && input.results.length > 0
+      && validSectionResultCount(job, input.results) !== (job.orders || []).length);
+}
+
+export function summarizeJobProgress(job = {}) {
+  const sections = job.orders || [];
+  const totalSections = sections.length;
+  const totalOrders = new Set(sections.filter((section) => !section.isSeparator)
+    .map((section) => String(section.orderNumber))).size;
+  const completedSections = job.status === 'printed' ? totalSections
+    : Math.min(totalSections, Math.max(0, Number(job.progress?.completedSections || 0)));
+  const confirmedPrefix = sections.slice(0, completedSections)
+    .map((section) => ({ orderNumber: section.orderNumber, spoolConfirmed: true }));
+  const completedOrders = confirmedOrderNumbers(job, { status: 'failed', results: confirmedPrefix }).size;
+  return {
+    status: job.status || 'created',
+    totalSections,
+    completedSections,
+    remainingSections: totalSections - completedSections,
+    totalOrders,
+    completedOrders,
+    remainingOrders: totalOrders - completedOrders,
+    currentOrderNumber: sections[completedSections]?.isSeparator ? null : sections[completedSections]?.orderNumber || null,
+    updatedAt: job.updatedAt || job.createdAt || '',
+    error: job.error || ''
+  };
+}
+
+function applyJobProgress(job, input) {
+  if (!job) return null;
+  const index = Number(input.sectionIndex);
+  const completed = Number(job.progress?.completedSections || 0);
+  if (!Number.isInteger(index) || index < 0 || index >= (job.orders || []).length
+    || input.spoolConfirmed !== true || input.skipped === true
+    || String(input.orderNumber) !== String(job.orders[index].orderNumber)) {
+    throw new Error('Invalid print section progress.');
+  }
+  if (index < completed) return job; // Idempotent callback retry.
+  if (index !== completed || !['created', 'printing'].includes(job.status)) {
+    throw new Error('Print section progress is out of order.');
+  }
+  job.status = 'printing';
+  job.updatedAt = new Date().toISOString();
+  job.progress = { completedSections: completed + 1 };
+  return job;
+}
+
 function parseStoredJson(value, fallback) {
   if (!value) return fallback;
   if (typeof value === 'object') return value;
@@ -78,13 +161,15 @@ export class StateStore {
   }
 
   async update(mutator) {
-    this.writeQueue = this.writeQueue.then(async () => {
+    const pending = this.writeQueue.then(async () => {
       await this.load();
       const result = await mutator(this.state);
       await this.persist();
       return result;
     });
-    return this.writeQueue;
+    // A rejected validation must not prevent every later state write.
+    this.writeQueue = pending.catch(() => {});
+    return pending;
   }
 
   async getState() {
@@ -127,6 +212,8 @@ export class StateStore {
       options: input.options || {},
       orders: input.orders || [],
       notes: input.notes || '',
+      resumedFromJobId: input.resumedFromJobId || '',
+      progress: { completedSections: 0 },
       callbackToken: input.callbackToken || ''
     };
 
@@ -153,21 +240,40 @@ export class StateStore {
       .map((job) => structuredClone(job));
   }
 
+  async findResumeJob(previousJobId) {
+    await this.load();
+    const job = this.state.jobs.find((item) => item.resumedFromJobId === previousJobId);
+    return job ? structuredClone(job) : null;
+  }
+
+  async updateJobProgress(jobId, input) {
+    return this.update((state) => {
+      const job = state.jobs.find((item) => item.id === jobId);
+      return job ? structuredClone(applyJobProgress(job, input)) : null;
+    });
+  }
+
   async completeJob(jobId, input) {
     const now = new Date().toISOString();
     return this.update((state) => {
       const job = state.jobs.find((item) => item.id === jobId);
       if (!job) return null;
+      if (job.status === 'failed' || job.status === 'printed') return structuredClone(job);
 
-      job.status = input.status === 'failed' ? 'failed' : 'printed';
+      job.status = completionFailed(job, input) ? 'failed' : 'printed';
       job.updatedAt = now;
       job.completedAt = now;
       job.completedBy = safeUser(input.user || job.createdBy);
-      job.error = input.error || '';
+      job.error = input.error || (job.status === 'failed' ? 'Incomplete agent confirmation.' : '');
+      const confirmedOrders = confirmedOrderNumbers(job, { ...input, status: job.status });
+      job.progress = { completedSections: job.status === 'printed'
+        ? (job.orders || []).length
+        : Math.max(Number(job.progress?.completedSections || 0), validSectionResultCount(job, input.results)) };
+      job.confirmedOrderNumbers = [...confirmedOrders];
 
-      if (job.status === 'printed') {
+      if (confirmedOrders.size) {
         for (const order of job.orders) {
-          if (order.isSeparator) continue;
+          if (order.isSeparator || !confirmedOrders.has(String(order.orderNumber))) continue;
           for (const document of order.documents || []) {
             if ((document.source || '') === 'generated' || document.type === 'comboSeparator') continue;
             state.printEvents.push({
@@ -252,8 +358,9 @@ export class DatastoreStateStore {
   }
 
   async update(mutator) {
-    this.writeQueue = this.writeQueue.then(async () => mutator());
-    return this.writeQueue;
+    const pending = this.writeQueue.then(async () => mutator());
+    this.writeQueue = pending.catch(() => {});
+    return pending;
   }
 
   async getState() {
@@ -318,6 +425,8 @@ export class DatastoreStateStore {
       options: input.options || {},
       orders: input.orders || [],
       notes: input.notes || '',
+      resumedFromJobId: input.resumedFromJobId || '',
+      progress: { completedSections: 0 },
       callbackToken: input.callbackToken || ''
     };
 
@@ -326,7 +435,8 @@ export class DatastoreStateStore {
       ['status', job.status],
       ['createdBy', job.createdBy],
       ['createdAt', job.createdAt],
-      ['updatedAt', job.updatedAt]
+      ['updatedAt', job.updatedAt],
+      ['resumedFromJobId', job.resumedFromJobId]
     ]);
 
     return job;
@@ -350,30 +460,62 @@ export class DatastoreStateStore {
       .map((job) => structuredClone(job));
   }
 
+  async findResumeJob(previousJobId) {
+    const datastore = await this.getDatastore();
+    const query = datastore.createQuery(this.kind(STORE_KINDS.job))
+      .filter('resumedFromJobId', '=', String(previousJobId)).limit(1);
+    const [entities] = await datastore.runQuery(query);
+    return entities?.[0] ? structuredClone(parseStoredJson(entities[0].json, null)) : null;
+  }
+
+  async updateJobProgress(jobId, input) {
+    return this.update(async () => {
+      const job = await this.getJob(jobId);
+      if (!job) return null;
+      const before = Number(job.progress?.completedSections || 0);
+      applyJobProgress(job, input);
+      if (Number(job.progress?.completedSections || 0) !== before) {
+        await this.saveEntity(STORE_KINDS.job, job.id, job, [
+          ['jobId', job.id], ['status', job.status], ['createdBy', job.createdBy],
+          ['createdAt', job.createdAt], ['updatedAt', job.updatedAt],
+          ['resumedFromJobId', job.resumedFromJobId || '']
+        ]);
+      }
+      return structuredClone(job);
+    });
+  }
+
   async completeJob(jobId, input) {
     const now = new Date().toISOString();
     return this.update(async () => {
       const job = await this.getJob(jobId);
       if (!job) return null;
+      if (job.status === 'failed' || job.status === 'printed') return structuredClone(job);
 
-      job.status = input.status === 'failed' ? 'failed' : 'printed';
+      job.status = completionFailed(job, input) ? 'failed' : 'printed';
       job.updatedAt = now;
       job.completedAt = now;
       job.completedBy = safeUser(input.user || job.createdBy);
-      job.error = input.error || '';
+      job.error = input.error || (job.status === 'failed' ? 'Incomplete agent confirmation.' : '');
+      const confirmedOrders = confirmedOrderNumbers(job, { ...input, status: job.status });
+      job.progress = { completedSections: job.status === 'printed'
+        ? (job.orders || []).length
+        : Math.max(Number(job.progress?.completedSections || 0), validSectionResultCount(job, input.results)) };
+      job.confirmedOrderNumbers = [...confirmedOrders];
 
       await this.saveEntity(STORE_KINDS.job, job.id, job, [
         ['jobId', job.id],
         ['status', job.status],
         ['createdBy', job.createdBy],
         ['createdAt', job.createdAt],
-        ['updatedAt', job.updatedAt]
+        ['updatedAt', job.updatedAt],
+        ['resumedFromJobId', job.resumedFromJobId || '']
       ]);
 
-      if (job.status === 'printed') {
+      if (confirmedOrders.size) {
         const writes = [];
         for (const order of job.orders) {
-          if (order.isSeparator) continue;
+          if (order.isSeparator || !confirmedOrders.has(String(order.orderNumber))) continue;
           for (const document of order.documents || []) {
             if ((document.source || '') === 'generated' || document.type === 'comboSeparator') continue;
             const event = {

@@ -110,8 +110,8 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
 
 ## Egna bilar – Tidig, FM, EM (preliminär läsvy)
 
-- **Orderns** `Ord.DelPri`, inte kundkortets, avgör tid: före 08 = Tidig,
-  09–10 = FM och 13–16 = EM. Klockan 08, 11 och 12 samt saknad/annan tid
+- **Orderns** `Ord.DelPri`, inte kundkortets, avgör tid: till och med 08 = Tidig,
+  09–10 = FM och från 13 till dygnets slut = EM. Klockan 11 och 12 samt saknad/annan tid
   hamnar inte i en snabbgrupp och markeras i översiktens upplysning.
 - Bekräftade egna bilars `Ord.DelMt`: `1–5`, `7–15`, `27` och `41`.
 - När Pindeliver ersätter `DelMt` med ett regnummer matchas tills vidare en
@@ -120,8 +120,11 @@ Visma-returer innan utskrift aktiveras; returutskrift är fortfarande spärrad.
   utskriftsregel. Externa leverantörsorder utesluts först.
 - Klar för utskrift betyder att både följesedel och partibilaga finns, att
   inget plock återstår och att de inte båda redan är utskrivna. Den gröna
-  siffran är sådana order; totalen inkluderar också utskrivna. Sortering i
-  listan sker på `DelPri`, sedan körsätt, sedan ordernummer.
+  siffran är sådana order; kortet visar också separat antal registrerat
+  utskrivna (båda dokumenten) och ännu inte redo. De tre grupperna summerar
+  till totalen. Registrerat utskriven betyder bekräftad i skrivarkön, inte
+  bevis för papper i utmatningsfacket. Sortering i listan sker på `DelPri`,
+  sedan körsätt, sedan ordernummer.
 - Kontrollera verkliga `Txt`-värden och en order efter Pindeliver mot Visma
   innan snabb- eller massutskrift aktiveras. Alla order är fortsatt åtkomliga i
   vanliga orderfliken även om snabbgrupperingen inte känner igen ett körsätt.

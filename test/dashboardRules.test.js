@@ -97,6 +97,20 @@ test('freight readiness ignores missing packing slips and combines routes 25 and
   assert.equal(panels['other-carriers'].total, 1);
 });
 
+test('freight panels count PDF availability and registered prints separately from booking eligibility', () => {
+  const panels = summarizeFreightPanels([
+    { orderNumber: '201', context: { deliveryMethod: 47, freightConsignmentFresh: 'CHILLED-201' }, documents: { freight: { printStatus: 'printed' } } },
+    { orderNumber: '202', context: { deliveryMethod: 48 }, documents: { freight: { printStatus: 'printed' } } },
+    { orderNumber: '203', context: { deliveryMethod: 47, freightConsignmentFrozen: 'FROZEN-203' }, documents: {} }
+  ]);
+  assert.deepEqual(
+    [panels['dsv-finland'].total, panels['dsv-finland'].ready, panels['dsv-finland'].waiting,
+      panels['dsv-finland'].printed, panels['dsv-finland'].missingBooking],
+    [3, 2, 1, 2, 1]
+  );
+  assert.equal(panels['dsv-finland'].orders.find(({ order }) => order.orderNumber === '202').printStatus, 'printed');
+});
+
 test('Eriksson uses the Kyl document rule and sorts by order DelPri', () => {
   const panels = summarizeFreightPanels([
     { orderNumber: '200', context: { deliveryMethod: 25, distributorNo: 7331697, dispatchPriority: 16, palletDocumentRequired: true }, documents: { pallet: { printStatus: 'pending' } } },
@@ -230,13 +244,46 @@ test('own-car dispatch uses order priority, requires both paper documents, and k
   assert.equal(unassignedCount, 1);
   assert.equal(registrationTextMatches, 1);
   assert.equal(dispatchSlotForContext({ dispatchPriority: 7 }), 'early');
-  assert.equal(dispatchSlotForContext({ dispatchPriority: 8 }), null);
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 8 }), 'early');
   assert.equal(dispatchSlotForContext({ dispatchPriority: 9 }), 'morning');
   assert.equal(dispatchSlotForContext({ dispatchPriority: 10 }), 'morning');
   assert.equal(dispatchSlotForContext({ dispatchPriority: 11 }), null);
   assert.equal(dispatchSlotForContext({ dispatchPriority: 12 }), null);
   assert.equal(dispatchSlotForContext({ dispatchPriority: 13 }), 'afternoon');
-  assert.equal(dispatchSlotForContext({ dispatchPriority: 17 }), null);
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 17 }), 'afternoon');
+  assert.equal(dispatchSlotForContext({ dispatchPriority: 24 }), null);
+});
+
+test('own-car overview separates ready, registered printed, and not-yet-ready orders', () => {
+  const context = { deliveryMethod: 1, dispatchPriority: 9 };
+  const pending = { packingSlip: { printStatus: 'pending' }, attachment: { printStatus: 'pending' } };
+  const printed = { packingSlip: { printStatus: 'printed' }, attachment: { printStatus: 'printed' } };
+  const { slots } = summarizeOwnDispatch([
+    { orderNumber: 'ready', context, documents: pending },
+    { orderNumber: 'printed', context, documents: printed },
+    { orderNumber: 'waiting', context, documents: { packingSlip: pending.packingSlip } }
+  ]);
+  assert.deepEqual([slots.morning.total, slots.morning.ready, slots.morning.printed,
+    slots.morning.total - slots.morning.ready - slots.morning.printed], [3, 1, 1, 1]);
+});
+
+test('own-car dashboard follows updated order priority and registration after rerouting', () => {
+  const documents = {
+    packingSlip: { printStatus: 'pending' },
+    attachment: { printStatus: 'pending' }
+  };
+  const before = summarizeOwnDispatch([{
+    orderNumber: '1993310', documents,
+    context: { deliveryMethod: 7, deliveryMethodName: 'Gammal bil', dispatchPriority: 9 }
+  }]);
+  const after = summarizeOwnDispatch([{
+    orderNumber: '1993310', documents,
+    context: { deliveryMethod: 101, deliveryMethodName: 'UEJ 64A', dispatchPriority: 8 }
+  }]);
+  assert.equal(before.slots.morning.total, 1);
+  assert.equal(after.slots.early.total, 1);
+  assert.equal(after.slots.early.orders[0].order.context.deliveryMethodName, 'UEJ 64A');
+  assert.equal(after.slots.morning.total, 0);
 });
 
 test('own-car ready count excludes fully printed packets but retains them in the total', () => {

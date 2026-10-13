@@ -445,6 +445,52 @@ test('job token allows local agent to fetch only documents in that print job', a
   assert.equal(outsideJob.status, 401);
 });
 
+test('agent progress needs the job token and a failed dashboard packet can resume its original snapshot once', async (t) => {
+  const handler = await createAuthHandler(t, { PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true' });
+  const login = await request(handler, '/login', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'operator', password: 'secret' })
+  });
+  const cookie = login.headers.get('set-cookie');
+  const createdResponse = await request(handler, '/api/print-jobs', {
+    method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ orderNumbers: ['1001', '1002'], documentTypes: ['packingSlip'], notes: 'Dashboard dispatch' })
+  });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  const progressPath = `/api/print-jobs/${created.job.id}/progress`;
+  assert.equal((await request(handler, progressPath)).status, 401);
+  assert.equal((await request(handler, progressPath, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sectionIndex: 0, orderNumber: '1001', spoolConfirmed: true })
+  })).status, 401);
+  const progressUrl = new URL(created.manifest.progressUrl);
+  const accepted = await request(handler, progressUrl.toString(), {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sectionIndex: 0, orderNumber: '1001', spoolConfirmed: true })
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).progress.completedOrders, 1);
+  const stopped = await request(handler, created.manifest.callbackUrl, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'failed', error: 'Paper jam' })
+  });
+  assert.equal(stopped.status, 200);
+  const resume = await request(handler, `/api/print-jobs/${created.job.id}/resume`, {
+    method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{}'
+  });
+  assert.equal(resume.status, 201);
+  const resumed = await resume.json();
+  assert.deepEqual(resumed.confirmedOrderNumbers, ['1001']);
+  assert.deepEqual(resumed.remainingOrderNumbers, ['1002']);
+  assert.deepEqual(resumed.job.orders.map((section) => section.orderNumber), ['1002']);
+  assert.deepEqual(resumed.job.orders[0].documents, created.job.orders[1].documents);
+  const again = await request(handler, `/api/print-jobs/${created.job.id}/resume`, {
+    method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{}'
+  });
+  assert.equal(again.status, 409);
+});
+
 test('print job history lists jobs and can create exact retry packets', async (t) => {
   const handler = await createAuthHandler(t);
   const login = await request(handler, '/login', {

@@ -1053,8 +1053,8 @@ are verification needs, not claims that the running system is broken.
 
 ### 2026-10-09 Edmark follow-up (local repository work)
 
-- Own-car Tidig/FM/EM now mean before 08:00, 09:00–10:00, and 13:00–16:00
-  respectively. Orders at 08:00, 11:00, and 12:00 remain outside those quick
+- Own-car Tidig/FM/EM now mean through 08:00, 09:00–10:00, and 13:00–23:00
+  respectively. Orders at 11:00 and 12:00 remain outside those quick
   cards and are counted in the caution message; this is an explicit gap, not a
   reassignment. Green ready counts exclude packets whose slip and attachment
   are both already printed; the dark total still includes them.
@@ -1244,3 +1244,121 @@ are verification needs, not claims that the running system is broken.
   was asked to refresh demo on W10 and try the Finland print; paper output and
   printed-status correctness await their observation. Orders without booking
   numbers remain visible and are skipped by bulk printing.
+
+### 2026-10-12 freight status clarity and failed-batch accounting (local only)
+
+- The owner supplied 20 route-47/48 Finland order numbers for 2026-10-12 and
+  clarified that the `9` visible in another Visma window is unrelated to this
+  Printward problem. Do not use that value to explain the missing-booking
+  warnings. Printward still reads booking numbers using its existing
+  `FreeInf1.Val1 IN (2,8)` filter, but the cause of the current warnings has
+  not been established. Compare the actual booking fields returned for an
+  affected order before changing this filter or the upstream integration.
+- Read-only demo state inspection found two failed Finland mass jobs: the first
+  contained 18 unique orders, the next 16. Orders `1991441` and `1991391`
+  appeared in neither; `1993020` and `1993099` appeared only in the first.
+  A separate job for `1993020` was recorded as printed. Both mass jobs failed
+  because Windows did not confirm a completed spool event on `printwarddirekt`.
+  Neither job record retained which of its sections physically produced paper.
+- Locally, Kyl & Frys, DSV Finland, and Eriksson now all say **med PDF**. That
+  number is file availability only. A separate count shows current-generation
+  print events registered by Printward and the number without an eligible
+  booking. Freight lookup rows display PDF/print status even if booking
+  eligibility disappears; the warning remains and new printing stays blocked.
+- The state stores now accept a failed agent callback's ordered, spool-confirmed
+  section results. They mark a document printed only if **all sections of that
+  order** appear in the confirmed prefix. A partly confirmed chilled/frozen
+  order stays unprinted. The job itself remains failed. The browser refreshes
+  status after an agent failure as well as success. These changes cannot
+  reconstruct the missing per-section results of older failed jobs or establish
+  which sheets were physically collected at the printer.
+- Local Node test suite passed 127/127 using the bundled Node CLI; the host has
+  no working `npm` binary. No live nShift call, physical print, Windows agent
+  update, GitHub push, Cloud Run deployment, freight job/scheduler change, or
+  production change was made for this local correction. Before deployment,
+  inspect current demo config and obtain authorization for the separate rollout.
+
+### 2026-10-13 own-car grouping and dashboard refresh (local only)
+
+- The owner clarified that the quick cards use each order's current `DelPri`:
+  Tidig through 08:00, FM 09:00–10:00, EM from 13:00 through 23:00. `DelPri` 11:00
+  and 12:00 remain outside the quick cards, but in Alla order. The own-car
+  `DelMt`/registration matching is unchanged and is read again after routing.
+- The visible dashboard checks the selected date every two minutes, except
+  while printing, reviewing, selecting, or in a dialog. Background refresh
+  preserves checked rows and prior data on failure. The browser shows when it
+  last fetched data or that an update failed. `refresh=auto` waits for an
+  expired order cache rebuild and concurrent requests share it; an unexpired
+  cache is reused. Manual update still forces a rebuild. This is read-only
+  polling of Printward/Visma context and stored document metadata, **not** a
+  new nShift fetch, GCS upload, print job, or change to freight sync cadence.
+- Freight overview cards show only the numbers, without `med dokument` or
+  `med PDF (ej verifierade)` suffixes. The separate registered-print count
+  remains; presence of a stored PDF is not proof of verified pages or paper.
+- Local Node suite passed 130/130 tests (`npm` is unavailable on this host;
+  bundled Node ran `node --test`). No GitHub push, Cloud Run
+  deployment, Windows agent update, live SQL/nShift call, or physical print
+  has been performed for this work. Live morning speed and two-minute behavior
+  must be verified after an explicitly authorized demo rollout.
+
+### 2026-10-13 dashboard batch progress and manual recovery (local only)
+
+- Each dashboard print job retains its existing per-order/per-temperature section
+  boundaries and original document snapshot. The updated local agent reports a
+  confirmed section after each Windows spool event; the server counts both
+  completed sections and **whole** completed orders. This applies equally to
+  Kyl & Frys and DSV Finland. A partially confirmed chilled/frozen order is
+  not marked printed and is included from its first section on manual resume.
+- The dashboard shows a live job counter (sections and whole orders), including
+  the next order. It remembers the latest job ID in that browser so its status
+  can be read after a reload. A failed dashboard job exposes a manual
+  **Återuppta återstående order** action with an explicit paper-check warning.
+  The server creates one new job containing only unconfirmed whole orders from
+  the *original snapshot*, with a fresh callback token, and rejects a second
+  resume of the same failed job. If the resumed job fails, resume that child.
+  Legacy whole-job retry is unchanged and must not be used for partial batches.
+- Windows spool confirmation is **not physical paper confirmation**. A jam or
+  delayed output requires the operator to inspect the printer and printed
+  stack before manually resuming. No automatic retry, live nShift fetch,
+  physical test, or Windows agent update occurred. An agent without the new
+  `progressReporting` capability can still print via its prior behavior but
+  cannot show intermediate counts; update each PC separately at rollout.
+- `npm test` could not run because this host has no `npm`; the bundled Node CLI
+  passed 134/134 tests, including token-gated progress, Finland partial-order
+  recovery, and snapshot-preserving resume. No GitHub push or Cloud Run deploy
+  has been done. Before deployment, review changes with the owner and confirm
+  target demo configuration; the owner explicitly wants to speak with Edmark
+  first. Production remains untouched.
+
+### 2026-10-13 overview status split and print preparation (local only)
+
+- Tidig/FM/EM cards now show ready now, registered printed, not yet ready, and
+  the total separately. The server computes a `printed` count only when both
+  slip and attachment have registered print status; it preserves the old
+  `waiting` field for compatibility. The browser derives not-yet-ready as
+  total minus ready minus printed. The lookup states explicitly that
+  registered printed is spool-confirmed status, not proof of physical paper.
+- The local agent now downloads and (on Windows) merges the upcoming two
+  section PDFs in separate per-section temporary folders while the current
+  section is printing. At most three sections are in flight, and failed
+  prefetches abort safely when reached. This reduces preparation gaps but
+  preserves one Windows spool job per section for independent stapling and
+  the existing per-section Event 307 confirmation. The printer's own pause
+  between jobs is not eliminated. No live printer validation has happened.
+- Bundled Node tests passed 136/136. `npm` remains unavailable on this Mac.
+  No GitHub push, demo/production deploy, or Windows-agent update has occurred.
+
+### 2026-10-13 dashboard count wording (local only)
+
+- The upper-left count is now labeled **Alla order**: it includes every order
+  in the selected date's source data, even one outside the visible print
+  groups. In the mock preview, two source orders but one own-car print order
+  are therefore expected, not a duplicate count.
+- Tidig/FM/EM say **X redo för utskrift av N order**. Tracked Kyl & Frys,
+  DSV Finland, and Eriksson cards instead say **X av N order utskrivna**;
+  the large number is the registered Printward print count, not merely the
+  number with stored PDF. The smaller line shows orders remaining and any
+  missing freight document or booking. This changes presentation only, not
+  eligibility, printer behavior, or print-event semantics.
+- No GitHub push, demo/production deploy, Windows-agent update, or physical
+  print was performed for this wording change.

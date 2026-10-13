@@ -135,8 +135,8 @@ function safeFileName(value) {
   return String(value || 'document.pdf').replace(/[^0-9A-Za-z._-]+/g, '_');
 }
 
-async function downloadDocument(document, dir) {
-  const response = await fetch(document.url);
+async function downloadDocument(document, dir, signal) {
+  const response = await fetch(document.url, { signal });
   if (!response.ok) {
     throw new Error(`Failed to download ${document.fileName || document.name}: ${response.status}`);
   }
@@ -194,6 +194,7 @@ async function printWithCups(order, files, printerName, options) {
   return {
     orderNumber: order.orderNumber,
     command: 'lp',
+    spoolConfirmed: true,
     output: `${stdout || ''}${stderr || ''}`.trim()
   };
 }
@@ -209,13 +210,14 @@ function sumatraPrintSettings(options) {
   return settings.join(',');
 }
 
-async function printWithSumatra(order, files, printerName, options, dir) {
+async function printWithSumatra(order, files, printerName, options, dir, preparedPacketPath) {
   const printBridge = await findWindowsPdfPrintBridge();
   if (!printBridge) {
     throw new Error('Windows PDF print bridge is not installed. Use Settings > Install print agent, then run the installer on this PC.');
   }
 
-  const packetPath = await mergePdfFiles(files, path.join(dir, safeFileName(`order-${order.orderNumber}-packet.pdf`)));
+  const packetPath = preparedPacketPath || await mergePdfFiles(files,
+    path.join(dir, safeFileName(`order-${order.orderNumber}-packet.pdf`)));
   const args = ['-silent'];
   const settings = sumatraPrintSettings(options);
   if (settings) args.push('-print-settings', settings);
@@ -242,12 +244,21 @@ async function printWithSumatra(order, files, printerName, options, dir) {
   };
 }
 
-async function printOrder(order, dir, printerName, options) {
+async function preparePrintSection(order, sectionIndex, dir, signal) {
+  const sectionDir = path.join(dir, `section-${sectionIndex}`);
+  await fs.mkdir(sectionDir);
   const files = [];
   for (const document of order.documents || []) {
-    files.push(await downloadDocument(document, dir));
+    files.push(await downloadDocument(document, sectionDir, signal));
   }
+  const packetPath = files.length && os.platform() === 'win32'
+    ? await mergePdfFiles(files, path.join(sectionDir, safeFileName(`order-${order.orderNumber}-packet.pdf`)))
+    : null;
+  return { sectionDir, files, packetPath };
+}
 
+async function printOrder(order, prepared, printerName, options) {
+  const { sectionDir, files, packetPath } = prepared;
   if (files.length === 0) {
     return {
       orderNumber: order.orderNumber,
@@ -257,7 +268,7 @@ async function printOrder(order, dir, printerName, options) {
   }
 
   if (os.platform() === 'win32') {
-    return printWithSumatra(order, files, printerName, options, dir);
+    return printWithSumatra(order, files, printerName, options, sectionDir, packetPath);
   }
 
   return printWithCups(order, files, printerName, options);
@@ -291,19 +302,58 @@ async function reportCompletion(callbackUrl, payload) {
   if (!response.ok) throw new Error(`Print job completion callback failed: HTTP ${response.status}`);
 }
 
+async function reportProgress(progressUrl, payload) {
+  if (!progressUrl) return;
+  const response = await fetch(progressUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000)
+  });
+  if (!response.ok) throw new Error(`Print job progress callback failed: HTTP ${response.status}`);
+}
+
 async function handlePrint(body) {
   const jobId = body.jobId || body.manifest?.jobId;
   const orders = body.orders || body.manifest?.orders || [];
   const callbackUrl = body.callbackUrl || body.manifest?.callbackUrl;
+  const progressUrl = body.progressUrl || body.manifest?.progressUrl;
   const options = body.options || {};
   const printerName = body.printerName || options.printerName || '';
   const user = body.user || 'operator';
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `printward-${jobId || 'job'}-`));
   const results = [];
+  const prefetchAbort = new AbortController();
+  const preparedSections = new Map();
+  const startPrefetch = (index) => {
+    if (index >= orders.length || preparedSections.has(index)) return;
+    // Keep at most the current and next two sections in flight. A failed
+    // future download is held as a value until its turn, never unhandled.
+    preparedSections.set(index, preparePrintSection(orders[index], index, dir, prefetchAbort.signal)
+      .then((prepared) => ({ prepared }), (error) => ({ error })));
+  };
 
   try {
-    for (const order of orders) {
-      results.push(await printOrder(order, dir, printerName, options));
+    for (let index = 0; index < Math.min(2, orders.length); index += 1) startPrefetch(index);
+    for (const [sectionIndex, order] of orders.entries()) {
+      startPrefetch(sectionIndex + 2);
+      const preparedResult = await preparedSections.get(sectionIndex);
+      preparedSections.delete(sectionIndex);
+      if (preparedResult.error) throw preparedResult.error;
+      const result = await printOrder(order, preparedResult.prepared, printerName, options);
+      if (result.skipped) throw new Error(`Print section ${sectionIndex + 1} has no documents.`);
+      results.push(result);
+      try {
+        await reportProgress(progressUrl, {
+          sectionIndex,
+          orderNumber: result.orderNumber,
+          spoolConfirmed: result.spoolConfirmed === true
+        });
+      } catch (error) {
+        // The final callback still carries the confirmed prefix if this
+        // intermediate status update cannot reach Printward.
+        console.warn(error.message);
+      }
     }
 
     await reportCompletion(callbackUrl, {
@@ -327,6 +377,8 @@ async function handlePrint(body) {
     error.results = results;
     throw error;
   } finally {
+    prefetchAbort.abort();
+    await Promise.allSettled(preparedSections.values());
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -351,6 +403,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         platform: os.platform(),
         hostname: os.hostname(),
+        progressReporting: true,
         ...capability
       }, origin);
       return;

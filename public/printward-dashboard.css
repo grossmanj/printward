@@ -8,8 +8,8 @@ button { cursor:pointer; }
 .read-only-banner { margin-left:auto; padding:5px 9px; border:1px solid #a7c8e8; border-radius:99px; color:#eaf5ff; font-size:11px; font-weight:700; }
 .dashboard { padding:0 11px 18px; }
 .toolbar { min-height:62px; display:flex; flex-wrap:wrap; align-items:center; gap:7px; padding:7px 4px; white-space:nowrap; }
-.metric { width:54px; height:44px; padding:5px 8px; border:1px solid var(--line); border-radius:4px; background:white; }
-.metric:nth-child(2) { width:67px; }.metric:nth-child(3) { width:61px; }
+.metric { width:84px; height:44px; padding:5px 8px; border:1px solid var(--line); border-radius:4px; background:white; }
+.metric:nth-child(2) { width:96px; }.metric:nth-child(3) { width:61px; }
 .metric span,.date span { display:block; color:#516277; font-size:8px; font-weight:700; }.metric b { display:block; margin-top:2px; color:var(--green); font-size:19px; line-height:1; }
 .updated-note { display:grid; gap:2px; width:130px; height:43px; padding:7px; border:1px solid #ffe0a2; border-radius:4px; color:#693d00; background:#fff1c9; text-align:left; font-size:8px; }.updated-note b { font-size:9px; }.updated-note span { color:#0b4c8e; text-decoration:underline; }
 .search { display:flex; align-items:center; gap:5px; width:180px; height:27px; padding:0 8px; border:1px solid var(--line); border-radius:3px; background:#fff; color:#5b6e83; }.search input { width:100%; border:0; outline:0; font-size:8px; }.date { width:130px; height:27px; padding:3px 7px; border:1px solid var(--line); border-radius:3px; background:white; }.date input { width:100%; border:0; padding:0; color:#1a3656; font-size:9px; font-weight:700; }.toolbar select,.control-button { height:27px; padding:0 9px; border:1px solid var(--line); border-radius:3px; background:white; color:#273d5b; font-size:8px; font-weight:700; }.active-date { color:white; background:var(--navy); border-color:var(--navy); }.refresh { height:29px; margin-left:auto; padding:0 12px; border:0; border-radius:4px; color:white; background:#1267b3; font-size:9px; font-weight:800; }
@@ -58,6 +58,8 @@ dialog { width:min(420px,90vw); border:0; border-radius:9px; box-shadow:0 18px 5
 .lookup-actions { display:flex; justify-content:flex-end; margin:13px 0 -4px; }.back-to-dashboard { min-height:38px; padding:0 14px; border:1px solid #a7bfd8; border-radius:6px; color:var(--navy); background:#fff; font-size:12px; font-weight:800; }.back-to-dashboard:hover,.back-to-dashboard:focus-visible { border-color:var(--navy); background:#eaf3fc; }
 .freight-type { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
 .route-code { display:block; margin-top:3px; color:var(--muted); font-size:10px; }
+.sync-status { margin:7px 4px 2px; color:var(--muted); font-size:11px; }
+.sync-status.sync-error { color:#a42828; font-weight:700; }
 @media (max-width:1180px) { body{min-width:0}.toolbar{flex-wrap:wrap}.simulation-toolbar{margin-left:0}.refresh{margin-left:0}.top-row,.bottom-row{grid-template-columns:1fr}.freight-cards{grid-template-columns:repeat(4,1fr)} }
 @media (max-width:720px) { .dashboard{padding:0 7px}.dispatch-cards,.chain-cards{grid-template-columns:1fr}.freight-cards{grid-template-columns:repeat(2,1fr)}.pickup-row{grid-template-columns:1fr max-content;}.pickup-row .pill,.pickup-row .staff-count{display:none}.pickup-row .row-action{grid-column:2} }
 
@@ -72,8 +74,8 @@ dialog { width:min(420px,90vw); border:0; border-radius:9px; box-shadow:0 18px 5
   .dashboard { padding:0 18px 32px; }
   .toolbar { min-height:88px; gap:10px; padding:11px 4px; }
   .simulation-toolbar button { min-height:39px; font-size:11px; }
-  .metric { width:76px; height:62px; padding:8px 10px; }
-  .metric:nth-child(2) { width:102px; }
+  .metric { width:102px; height:62px; padding:8px 10px; }
+  .metric:nth-child(2) { width:132px; }
   .metric span,.date span { font-size:10px; }
   .metric b { margin-top:4px; font-size:27px; }
   .updated-note { width:184px; height:62px; padding:10px; font-size:10px; }
@@ -132,6 +134,8 @@ dialog { width:min(420px,90vw); border:0; border-radius:9px; box-shadow:0 18px 5
 .freight-plan-error { color:#a52626; font-weight:700; }
 .freight-review h3 { margin:14px 0 7px; font-size:13px; }
 .orders-table td[rowspan] { vertical-align:middle; }.freight-booking-kind { display:inline-block; min-width:44px; margin-right:5px; padding:3px 6px; border-radius:4px; color:#1c5688; background:#e5f1fb; font-size:10px; font-weight:800; }.freight-booking-extra td { background:#fafcff; }
+.freight-card .freight-card-note { margin:-9px 0 8px; color:var(--muted); font-size:10px; line-height:1.25; }
+.freight-booking-warning { display:block; margin-top:4px; color:#a52626; font-weight:700; }
 
 /* Read-only layout for the future quick-print actions. The disabled buttons
    make the intended flow visible without submitting a print job. */
@@ -167,8 +171,8 @@ dialog { width:min(420px,90vw); border:0; border-radius:9px; box-shadow:0 18px 5
 @media (min-width:1181px) { .quick-print { min-height:37px; font-size:11px; } }
 @media (min-width:1181px) and (max-width:1600px) {
   .toolbar { gap:6px; }
-  .metric { width:61px; }
-  .metric:nth-child(2) { width:82px; }
+  .metric { width:91px; }
+  .metric:nth-child(2) { width:112px; }
   .search { width:180px; }
   .date { width:145px; }
   .toolbar select,.control-button { padding:0 9px; font-size:10px; }
@@ -177,3 +181,12 @@ dialog { width:min(420px,90vw); border:0; border-radius:9px; box-shadow:0 18px 5
   .simulation-toolbar button { padding:5px 7px; font-size:10px; }
   .simulation-toolbar #simulationStatus { max-width:125px; font-size:9px; }
 }
+.print-job-progress { position:fixed; z-index:20; left:20px; bottom:20px; width:min(390px,calc(100vw - 40px)); padding:14px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--navy); box-shadow:0 8px 28px #102d4c55; }
+.print-job-progress[hidden] { display:none; }
+.print-job-progress p { margin:8px 0; }
+.print-job-progress progress { display:block; width:100%; height:16px; }
+.print-job-progress small { display:block; margin:8px 0; color:#52647a; }
+.print-job-progress button { margin-top:4px; padding:8px 12px; border:0; border-radius:4px; color:white; background:var(--navy); cursor:pointer; }
+.dispatch-card .dispatch-status-breakdown { margin-top:5px; font-size:9px; line-height:1.3; }
+.dispatch-card .dispatch-status-breakdown output { font-weight:700; }
+.dispatch-card .dispatch-total { font:inherit; }

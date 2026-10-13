@@ -101,12 +101,31 @@ more vertical space for the order panels.
 The Tidig/FM/EM follow-slip cards use
 `GET /api/dashboard/dispatch?deliveryDate=YYYY-MM-DD`, grouped by the **order's**
 `DelPri` and confirmed own-car `DelMt` codes or a preliminary registration-text
-match. Tidig is before 08:00, FM is 09:00–10:00, and EM is 13:00–16:00;
-orders at 08:00, 11:00, or 12:00 remain outside these quick cards and are
+match. Tidig is through 08:00, FM is 09:00–10:00, and EM is 13:00–23:00;
+orders at 11:00 or 12:00 remain outside these quick cards and are
 reported in Alla order. The green count includes only unprinted orders whose
-packing slip and attachment exist and whose packing is complete; the dark count
-is the total including printed orders. The card count is labeled **klara för
-utskrift**, not printed. Sushi Yama
+packing slip and attachment exist and whose packing is complete. Each card
+shows **redo för utskrift av N order**, **registrerat utskrivna**, and
+**ännu inte redo**; the `N` is the number of orders in that own-car time slot.
+The top **Alla order** counter instead includes every order in the selected
+date's source data, including orders outside the visible print groups. Tracked
+freight cards show **X av N order utskrivna** using registered Printward print
+events, with remaining/missing-document counts underneath;
+the three status groups add up to the total. Registered printed means that
+both documents have Printward print events, not proof of physical paper.
+
+The dashboard now polls the selected date every two minutes while its browser
+tab is visible. Background polling waits for an expired server order cache to
+finish rebuilding instead of showing its previous value; concurrent dashboard
+requests share that rebuild. It pauses while a print, dialog, selection, or
+review is active so a user's checked orders are not reset. The timestamp says
+when the browser last fetched the overview, not when Visma or nShift generated
+a PDF. The manual **Uppdatera** action still forces a rebuild. This polling is
+read-only: it does not fetch from nShift, create print jobs, or modify Visma.
+The live Cloud Run cache settings and morning performance remain to be measured
+after deployment.
+
+Sushi Yama
 (`Actor.R12=41`) and ChopChop (`Actor.R12=100`) use
 `GET /api/dashboard/chains?deliveryDate=YYYY-MM-DD` to show printed/total
 **remote-freight** orders only: both packing slip and attachment must have
@@ -183,6 +202,12 @@ Other carriers remain departure-only. The fictional mock order `900001` on
 `2026-06-24` demonstrates two bookings on one Kyl & Frys order. Real print
 actions require the dashboard print flag and the local Print Agent; selection
 and read-only review themselves do not print or call nShift.
+All three tracked freight cards use the same **med PDF** count: it means that
+an order has a stored freight/pallet file, not that its pages were verified or
+printed. A separate count shows current-generation print events registered by
+Printward and warns when no booking is eligible. The lookup keeps PDF and print
+status visible even when the current order context has no eligible booking number; new printing
+still stays blocked for that order. PDF content is checked at review/print time.
 Bulk selection and the quick action skip orders without a chilled/frozen
 booking number, leaving them visible with a clear warning. The overview's
 freight quick action rechecks each order and its PDF independently: an order
@@ -681,6 +706,27 @@ StapleLocation=UpperLeft
 Printer finishing options vary by driver. Change the staple option in Settings to match the local printer's CUPS option.
 
 On Windows, the installer configures the local agent with portable SumatraPDF as the PDF print bridge. The agent merges each normal order packet or Kyl section into one PDF and sends a separate print job for each. SumatraPDF can set common options such as copies, collation, duplex, color mode, tray, and paper size, but stapling is controlled by the Windows printer driver. For stapling, create or select a Windows printer queue whose driver preferences already enable the wanted finisher/staple mode, for example an `MP C4504 Staple` queue.
+If a multi-order Windows print fails after some sections were confirmed by the
+spooler, Printward records only orders whose **every** section was confirmed.
+The overall job remains failed, and an order with only one of its chilled/frozen
+sections confirmed remains unprinted at order level. The dashboard refreshes
+status after both successful and failed agent responses. Spool confirmation
+does not prove physical paper output; inspect a failed queue before retrying.
+With the updated agent, a dashboard print run shows completed/remaining sections
+and whole orders as each section reaches the spooler. The last run remains
+visible after a page reload. If a run fails, **Återuppta återstående order**
+creates a new job from the original document snapshot, excluding only complete
+orders confirmed by the spooler. A partially printed chilled/frozen order is
+reprinted from its first section. Recovery is manual, never automatic: clear
+the printer fault and check what paper actually emerged before clicking. Do not
+use the generic legacy retry for a partially completed dashboard batch; it
+replays the whole packet. Each failed dashboard job can be resumed once; if the
+new run also fails, resume that newer failed job. The progress display requires
+the updated agent on each PC; deploying the web app alone does not update agents.
+The updated agent prepares upcoming sections while the current one prints to
+reduce network/PDF preparation gaps. It still submits separate Windows spool
+jobs for each order/temperature packet so per-packet stapling remains intact.
+It does not remove a printer's own pause between those jobs.
 
 The Windows installer downloads this repository's `main` branch. Rerun it to update
 an installed agent; pushing to GitHub or deploying Cloud Run does not update PCs.
@@ -703,6 +749,9 @@ GET  /api/events
 GET  /api/print-jobs
 POST /api/print-jobs
 POST /api/print-jobs/:id/retry
+POST /api/print-jobs/:id/resume
+GET  /api/print-jobs/:id/progress
+POST /api/print-jobs/:id/progress
 GET  /api/print-jobs/:id/manifest
 POST /api/print-jobs/:id/complete
 GET  /api/documents?name=objectName&source=primary

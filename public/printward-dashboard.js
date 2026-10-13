@@ -5,6 +5,10 @@ const dialog = document.querySelector('#detailsDialog');
 const title = document.querySelector('#dialogTitle');
 const detail = document.querySelector('#dialogDetail');
 const toast = document.querySelector('#toast');
+const printProgressPanel = document.querySelector('#printJobProgress');
+const printProgressText = document.querySelector('#printJobProgressText');
+const printProgressBar = document.querySelector('#printJobProgressBar');
+const resumePrintButton = document.querySelector('#resumePrintJob');
 const grid = document.querySelector('.grid');
 const ordersView = document.querySelector('#ordersView');
 const search = document.querySelector('#dashboardSearch');
@@ -13,6 +17,7 @@ const deliveryDate = document.querySelector('#dashboardDate');
 const total = document.querySelector('#dashboardTotal');
 const packing = document.querySelector('#dashboardPacking');
 const dashboardSource = document.querySelector('#dashboardSource');
+const syncStatus = document.querySelector('#syncStatus');
 const simulationDialog = document.querySelector('#simulationDialog');
 const simulationToggle = document.querySelector('#simulationToggle');
 const simulationStatus = document.querySelector('#simulationStatus');
@@ -22,6 +27,9 @@ const virtualPrinter = createVirtualPrinter(simulationStorage);
 let simulationEnabled = false;
 let realPrintingEnabled = false;
 let activeRealPrint = false;
+let progressJobId = '';
+let progressTimer = null;
+let agentReportsProgress = false;
 let proposedSimulation = null;
 let lookupSort = 'priority';
 const statuses = { search: 'all', alla: 'all', plock: 'blocked', uppdaterade: 'reprint', saknade: 'missing' };
@@ -62,6 +70,16 @@ let chainRequest = 0;
 let activeChainPanel = null;
 const selectedChainOrders = new Set();
 let chainReviewOpen = false;
+const AUTO_REFRESH_MS = 120_000;
+let autoRefreshRunning = false;
+let initialLoading = true;
+let lastRefreshAttempt = Date.now();
+function showSyncStatus(success) {
+  syncStatus.textContent = success
+    ? `Senast hämtat ${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', hour: '2-digit', minute: '2-digit' }).format(new Date())} · uppdateras varannan minut`
+    : 'Uppdateringen misslyckades · kontrollera uppgifterna';
+  syncStatus.classList.toggle('sync-error', !success);
+}
 
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]); }
 function statusLabel(status) { return ({ missing: 'Saknas', blocked: 'Pågående plock', ready: 'Klar', pending: 'Behöver utskrift', reprint: 'Uppdaterad', printed: 'Utskriven' })[status] || status || 'Okänd'; }
@@ -193,19 +211,128 @@ async function testPrinterSettings() {
       const selected = document.querySelector('#printPrinter').value.trim();
       status.textContent = selected && !queues.some((printer) => printer.name === selected)
         ? `Print Agent är redo, men skrivarkön ”${selected}” finns inte på denna dator.`
-        : `Print Agent är redo · ${queues.length} skrivarköer hittades.`;
+        : `Print Agent är redo · ${queues.length} skrivarköer hittades.${details.progressReporting ? '' : ' Uppdatera agenten för löpande utskriftsstatus.'}`;
     } catch (error) {
       status.textContent = `Print Agent är redo, men skrivarköerna kunde inte hämtas: ${error.message}`;
     }
   } catch (error) { status.textContent = `Agenten är inte redo: ${error.message}`; }
 }
 
+function renderPrintProgress(progress) {
+  const { status, completedSections = 0, totalSections = 0, completedOrders = 0,
+    totalOrders = 0, remainingOrders = 0, currentOrderNumber } = progress;
+  printProgressBar.max = Math.max(1, totalSections);
+  printProgressBar.value = completedSections;
+  if (status === 'printed') {
+    printProgressText.textContent = `Klart: ${totalOrders} order, ${totalSections} buntar bekräftade av skrivarkön.`;
+  } else if (status === 'failed') {
+    printProgressText.textContent = `Avbruten: ${completedOrders} av ${totalOrders} hela order bekräftade. ${remainingOrders} order återstår. Kontrollera utskrifterna innan återstart.`;
+  } else if (!agentReportsProgress) {
+    printProgressText.textContent = 'Utskrift pågår. Den lokala agenten behöver uppdateras för att visa löpande förlopp.';
+  } else {
+    printProgressText.textContent = `${completedSections} av ${totalSections} buntar · ${completedOrders} av ${totalOrders} order klara i skrivarkön${currentOrderNumber ? ` · nu order ${currentOrderNumber}` : ''}.`;
+  }
+  resumePrintButton.hidden = status !== 'failed' || remainingOrders === 0;
+  resumePrintButton.dataset.jobId = progressJobId;
+  if (['printed', 'failed'].includes(status) && progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+}
+
+async function refreshPrintProgress(jobId) {
+  const response = await fetch(`/api/print-jobs/${encodeURIComponent(jobId)}/progress`);
+  if (!response.ok) throw new Error(`Utskriftsstatus kunde inte hämtas (HTTP ${response.status}).`);
+  const payload = await response.json();
+  if (progressJobId === jobId) renderPrintProgress(payload.progress);
+  return payload.progress;
+}
+
+function trackPrintJob(job, agent) {
+  if (progressTimer) clearInterval(progressTimer);
+  progressJobId = job.id;
+  try { localStorage.setItem('printward:lastPrintJobId', job.id); } catch { /* Optional browser persistence. */ }
+  agentReportsProgress = agent?.progressReporting === true;
+  printProgressPanel.hidden = false;
+  renderPrintProgress(job.progress || { status: 'created', totalSections: job.orders?.length || 0,
+    totalOrders: new Set(job.orders?.map((section) => String(section.orderNumber)) || []).size });
+  progressTimer = setInterval(() => refreshPrintProgress(job.id).catch(() => {}), 1500);
+  refreshPrintProgress(job.id).catch(() => {});
+}
+
+function restoreLastPrintJob() {
+  let jobId = '';
+  try { jobId = localStorage.getItem('printward:lastPrintJobId') || ''; } catch { return; }
+  if (!jobId) return;
+  progressJobId = jobId;
+  agentReportsProgress = true;
+  printProgressPanel.hidden = false;
+  printProgressText.textContent = 'Hämtar senaste utskriftskörningen…';
+  refreshPrintProgress(jobId).catch(() => {
+    printProgressPanel.hidden = true;
+    clearInterval(progressTimer);
+    progressTimer = null;
+  });
+  progressTimer = setInterval(() => refreshPrintProgress(jobId).catch(() => {}), 1500);
+}
+
+async function sendManifestToAgent(manifest, defaults) {
+  const printed = await fetch(`${defaults.agentUrl}/print`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...manifest, user: localStorage.getItem('printward:user') || 'operator',
+      printerName: defaults.printerName, options: defaults })
+  });
+  const result = await printed.json().catch(() => ({}));
+  if (!printed.ok) throw new Error(result.error || 'Print Agent kunde inte skriva ut. Kontrollera jobbet innan du försöker igen.');
+}
+
+async function refreshAfterPrint() {
+  await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
+  if (statuses[activeView]) await loadOrders(activeView, true);
+}
+
+resumePrintButton.addEventListener('click', async () => {
+  const previousJobId = resumePrintButton.dataset.jobId;
+  if (!previousJobId || activeRealPrint) return;
+  if (!window.confirm('Kontrollera först vad som faktiskt kommit ut ur skrivaren. Endast hela order som inte bekräftats av skrivarkön startas om; en påbörjad order skrivs ut från början. Fortsätta?')) return;
+  activeRealPrint = true;
+  resumePrintButton.disabled = true;
+  try {
+    const defaults = printDefaults();
+    const health = await fetch(`${defaults.agentUrl}/health`, { signal: AbortSignal.timeout(3000) });
+    const agent = health.ok ? await health.json() : null;
+    if (!agent?.canPrint || (agent.platform === 'win32' && !agent.spoolConfirmation)) throw new Error('Print Agent är inte redo för säker återstart.');
+    const response = await fetch(`/api/print-jobs/${encodeURIComponent(previousJobId)}/resume`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user: localStorage.getItem('printward:user') || 'operator',
+        printerName: defaults.printerName, options: defaults })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Återstart kunde inte förberedas.');
+    trackPrintJob(payload.job, agent);
+    await sendManifestToAgent(payload.manifest, defaults);
+    const finalProgress = await refreshPrintProgress(payload.job.id);
+    if (finalProgress?.status === 'failed') throw new Error(finalProgress.error || 'Utskriften bekräftades inte helt.');
+    showToast(`${payload.remainingOrderNumbers.length} återstående order skickade till skrivaren.`, 6000);
+    await refreshAfterPrint();
+  } catch (error) {
+    showToast(`Återstart stoppad: ${error.message}`, 12000);
+    if (progressJobId) await refreshPrintProgress(progressJobId).catch(() => {});
+    await refreshAfterPrint().catch(() => {});
+  } finally {
+    activeRealPrint = false;
+    resumePrintButton.disabled = false;
+    refreshSimulationDisplays();
+  }
+});
+
 async function printDashboardItems(kind, panelId, label, items, { bulkFreight = false } = {}) {
   if (!realPrintingEnabled || activeRealPrint || !items.length) return;
   const orderNumbers = [...new Set(items.map((item) => String(item.orderNumber)))];
-  const bulkWarning = bulkFreight ? ' Order utan bokningsnummer eller komplett PDF hoppas över och redovisas efteråt.' : '';
+  const bulkWarning = bulkFreight ? ' Order utan utskriftsbar bokning eller komplett PDF hoppas över och redovisas efteråt.' : '';
   if (!window.confirm(`Skriva ut upp till ${orderNumbers.length} order i ${label} på den här datorns skrivare? Detta är en riktig utskrift.${bulkWarning}`)) return;
   activeRealPrint = true;
+  let jobCreated = false;
   showToast('Kontrollerar lokal skrivare och aktuella PDF-dokument…');
   try {
     const defaults = printDefaults();
@@ -231,14 +358,11 @@ async function printDashboardItems(kind, panelId, label, items, { bulkFreight = 
       const detail = skipped.length ? ` Överhoppade: ${skipped.map((item) => `${item.orderNumber} (${item.reason})`).join('; ')}` : '';
       throw new Error(`${(payload.errors || [payload.error || 'Utskriftsjobbet kunde inte skapas.']).join(' ')}${detail}`);
     }
-    const printed = await fetch(`${defaults.agentUrl}/print`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...payload.manifest, user: localStorage.getItem('printward:user') || 'operator',
-        printerName: defaults.printerName, options: defaults })
-    });
-    const result = await printed.json().catch(() => ({}));
-    if (!printed.ok) throw new Error(result.error || 'Print Agent kunde inte skriva ut. Kontrollera jobbet innan du försöker igen.');
+    jobCreated = true;
+    trackPrintJob(payload.job, agent);
+    await sendManifestToAgent(payload.manifest, defaults);
+    const finalProgress = await refreshPrintProgress(payload.job.id);
+    if (finalProgress?.status === 'failed') throw new Error(finalProgress.error || 'Utskriften bekräftades inte helt.');
     const actualOrders = new Set(payload.job?.orders?.map((order) => String(order.orderNumber)) || []);
     const skipped = payload.skipped || [];
     const skipText = skipped.length
@@ -246,13 +370,20 @@ async function printDashboardItems(kind, panelId, label, items, { bulkFreight = 
       : '';
     showToast(`${actualOrders.size} order skickade till skrivaren.${skipText} Uppdaterar status…`, skipped.length ? 12000 : 2400);
     try {
-      await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true)]);
-      if (statuses[activeView]) await loadOrders(activeView, true);
+      await refreshAfterPrint();
     } catch {
       showToast(`${actualOrders.size} order skickades till skrivaren, men status kunde inte uppdateras. Kontrollera utskriftskön innan du försöker igen.${skipText}`, 12000);
     }
   } catch (error) {
     showToast(`Utskrift stoppad: ${error.message}`, 12000);
+    if (progressJobId) await refreshPrintProgress(progressJobId).catch(() => {});
+    // Earlier sections may have been confirmed before a later Windows job failed.
+    // Refresh their server-recorded status even when the agent returns an error.
+    if (jobCreated) {
+      try {
+        await refreshAfterPrint();
+      } catch { /* Keep the original print error visible; a later refresh can retry status. */ }
+    }
   } finally {
     activeRealPrint = false;
     refreshSimulationDisplays();
@@ -452,9 +583,15 @@ function renderFreightCards(payload) {
     const panel = payload.panels?.[card.dataset.freightPanel];
     const primary = card.querySelector('b em');
     const count = card.querySelector('.freight-total');
+    const note = card.querySelector('.freight-card-note');
     const badge = card.querySelector('strong i');
-    if (primary) primary.textContent = available ? (panel?.documentTracking ? panel.ready : panel?.departureCount) ?? 0 : '–';
+    if (primary) primary.textContent = available ? (panel?.documentTracking ? panel.printed : panel?.departureCount) ?? 0 : '–';
     if (count) count.textContent = available ? panel?.total ?? 0 : '–';
+    if (note) note.textContent = available
+      ? panel?.documentTracking
+        ? `${Math.max(0, (panel?.total ?? 0) - (panel?.printed ?? 0))} återstår${panel?.waiting ? ` · ${panel.waiting} saknar fraktdokument` : ''}${panel?.missingBooking ? ` · ${panel.missingBooking} saknar bokning` : ''}`
+        : ''
+      : 'Utskriftsstatus kan inte visas';
     if (badge) {
       badge.textContent = available ? panel?.waiting ?? 0 : '';
       badge.hidden = !available || !panel?.waiting;
@@ -497,17 +634,18 @@ function renderFreightList() {
     const virtualStatus = documentType && simulated(order.orderNumber, documentType);
     const selectable = freightBulkCandidate({ order, documentType, documentReady });
     const status = panel.documentTracking
-      ? !hasTemperatureBooking(order) ? 'Bokningsnummer saknas · kvar i listan'
-        : documentReady ? virtualStatus ? 'Simulerat utskriven · riktig status oförändrad'
-          : `${activeFreightPanel === 'dsv-finland' ? 'PDF finns · innehåll ej verifierat' : 'Dokument finns'} · ${statusLabel(printStatus)}` : 'Fraktdokument saknas'
+      ? documentReady ? virtualStatus ? 'PDF finns · simulerat utskriven · riktig status oförändrad'
+        : `PDF finns · ${statusLabel(printStatus)}` : 'PDF saknas'
       : 'Avgång visas · ingen utskrift här';
+    const bookingWarning = panel.documentTracking && !hasTemperatureBooking(order)
+      ? '<small class="freight-booking-warning">Ingen utskriftsbar bokning · ny utskrift spärrad</small>' : '';
     const bookingRows = bookings?.length ? bookings : [{ kind: '–', number: '–' }];
-    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Bokningsnummer eller dokument saknas, eller ordern är redan utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : !hasTemperatureBooking(order) ? 'missing' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
+    return bookingRows.map((booking, index) => `<tr data-order="${escapeHtml(order.orderNumber)}" class="${index ? 'freight-booking-extra' : ''}">${index ? '' : `${panel.documentTracking ? `<td rowspan="${bookingRows.length}"><input class="freight-select" type="checkbox" data-select-freight-order="${escapeHtml(order.orderNumber)}" aria-label="Markera fraktdokument för order ${escapeHtml(order.orderNumber)}" ${selectable ? '' : 'disabled title="Utskriftsbar bokning eller PDF saknas, eller ordern är redan utskriven"'} ${selectable && selectedFreightOrders.has(String(order.orderNumber)) ? 'checked' : ''}></td>` : ''}<td rowspan="${bookingRows.length}"><strong>${escapeHtml(order.orderNumber)}</strong></td><td rowspan="${bookingRows.length}">${escapeHtml(context.customerName || context.deliveryName || '–')}</td><td rowspan="${bookingRows.length}">${escapeHtml(context.dispatchTime || '–')} · ${escapeHtml(context.deliveryMethodName || context.routeGroup || '–')}</td>`}<td><span class="freight-booking-kind">${escapeHtml(booking.kind)}</span> <strong>${escapeHtml(booking.number)}</strong></td>${index ? '' : `<td rowspan="${bookingRows.length}"><span class="order-status ${virtualStatus ? 'simulated' : documentReady ? 'ready' : panel.documentTracking ? 'missing' : ''}">${escapeHtml(status)}</span>${bookingWarning}${documentType ? `<small class="freight-type">${documentType === 'pallet' ? 'Fraktdokument/etikett' : 'Fraktsedel'}</small>` : ''}</td><td rowspan="${bookingRows.length}"><button class="show-dispatch-order" type="button" data-show-freight-order="${escapeHtml(order.orderNumber)}">Visa order</button></td>`}</tr>`);
   }).join('');
   const name = freightNames[activeFreightPanel];
   const bookingCount = panel.orders.reduce((sum, item) => sum + (item.bookings?.length || 0), 0);
   const overview = panel.documentTracking
-    ? `${panel.ready} av ${panel.total} order har ${activeFreightPanel === 'dsv-finland' ? 'PDF (etiketter och fraktsedlar verifieras först vid utskrift)' : 'fraktdokument'}. ${panel.waiting} väntar på dokument. ${bookingCount} bokningsrader.`
+    ? `PDF finns för ${panel.ready} av ${panel.total} order. ${panel.printed ?? 0} registrerade som utskrivna. ${panel.missingBooking ?? 0} utan utskriftsbar bokning. ${bookingCount} bokningsrader. PDF-innehållet kontrolleras först vid granskning eller utskrift.`
     : `${panel.departureCount} avgångar, ${panel.total} order. Inga dokument skrivs ut från denna grupp ännu.`;
   const reviewRows = (freightPlan?.orders || []).map((order) => {
     const bookingText = order.bookings?.length
@@ -531,7 +669,7 @@ function renderFreightList() {
     return `<li><strong>Order ${escapeHtml(section.orderNumber)} · ${label}</strong><small>${pages}${copies}</small></li>`;
   }).join('');
   const selection = panel.documentTracking
-    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla utskriftsbara i listan</label><span>${selectedItems.length} valda · order utan bokningsnummer ligger kvar men hoppas över</span><button id="reviewFreightSelection" type="button" ${selectedItems.length && !activeRealPrint ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
+    ? `<div class="dispatch-selection freight-selection"><label><input id="selectAllFreightReady" type="checkbox" ${selectableVisible.length ? '' : 'disabled'} ${selectableVisible.length > 0 && selectableVisible.every(({ order }) => selectedFreightOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla utskriftsbara i listan</label><span>${selectedItems.length} valda · order utan utskriftsbar bokning ligger kvar men hoppas över</span><button id="reviewFreightSelection" type="button" ${selectedItems.length && !activeRealPrint ? '' : 'disabled'}>Granska valda</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>`
     : '';
   const review = panel.documentTracking && freightReviewOpen && selectedItems.length
     ? `<section class="dispatch-review freight-review" aria-label="Granskning av fraktdokument"><h2>Valda fraktdokument · ${selectedItems.length} order</h2><p>Servern kontrollerar grupp, PDF-sidor och ordning mot aktuell data. Kylt och fryst visas som egna bokningsrader men väljs per order. Inga följesedlar ingår och ingen utskrift startas.</p>${freightReviewPending ? '<p>Kontrollerar PDF-sidor…</p>' : freightPlanError ? `<p class="freight-plan-error">${escapeHtml(freightPlanError)}</p>` : `<ol>${reviewRows}</ol><h3>Verifierad sidordning</h3><ol>${reviewSections}</ol>`}</section>`
@@ -597,29 +735,35 @@ function renderFreightList() {
   }));
 }
 
-async function loadFreightDashboard(refresh = false) {
+async function loadFreightDashboard(refresh = false, background = false) {
   const request = ++freightRequest;
-  freightPayload = null;
-  selectedFreightOrders.clear();
-  clearFreightReview();
+  if (!background) {
+    freightPayload = null;
+    selectedFreightOrders.clear();
+    clearFreightReview();
+  }
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
-  if (refresh) params.set('refresh', '1');
-  dashboardSource.textContent = 'Hämtar följesedlar, fraktsedlar, returer, hämtningar och kedjor. Övriga kunder väntar på DocSmt-regeln.';
-  if (activeView === 'freight') ordersView.innerHTML = '<div class="orders-empty">Hämtar fraktsedlar…</div>';
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background) dashboardSource.textContent = 'Hämtar följesedlar, fraktsedlar, returer, hämtningar och kedjor. Övriga kunder väntar på DocSmt-regeln.';
+  if (!background && activeView === 'freight') ordersView.innerHTML = '<div class="orders-empty">Hämtar fraktsedlar…</div>';
   try {
     const response = await fetch(`/api/dashboard/freight?${params}`);
     if (!response.ok) throw new Error('Kunde inte hämta fraktsedlar.');
     const payload = await response.json();
-    if (request !== freightRequest) return;
+    if (request !== freightRequest) return false;
+    if (payload.contextStatus?.available === false) throw new Error('Visma-data kunde inte uppdateras.');
     freightPayload = payload;
     renderFreightCards(payload);
     if (activeView === 'freight') renderFreightList();
+    return true;
   } catch (error) {
-    if (request !== freightRequest) return;
+    if (request !== freightRequest) return false;
+    if (background) return false;
     freightPayload = null;
     renderFreightCards({ deliveryDate: deliveryDate.value, contextStatus: { available: false } });
     dashboardSource.textContent = error.message;
     if (activeView === 'freight') ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
   }
 }
 
@@ -631,6 +775,9 @@ function renderDispatchCards(payload) {
     const slot = payload.slots?.[card.dataset.dispatchSlot];
     card.querySelector('b em').textContent = available ? slot?.ready ?? 0 : '–';
     card.querySelector('.dispatch-total').textContent = available ? slot?.total ?? 0 : '–';
+    card.querySelector('.dispatch-printed').textContent = available ? slot?.printed ?? 0 : '–';
+    card.querySelector('.dispatch-not-ready').textContent = available
+      ? Math.max(0, (slot?.total ?? 0) - (slot?.ready ?? 0) - (slot?.printed ?? 0)) : '–';
     const candidates = available ? (slot?.orders || []).filter((item) => item.ready)
       .flatMap(({ order }) => packetCandidates(order)) : [];
     const simulatedCount = (slot?.orders || []).filter(({ order }) => simulated(order.orderNumber, 'packingSlip')
@@ -691,7 +838,7 @@ function renderDispatchList() {
   const review = dispatchReviewOpen && selectedItems.length
     ? `<section class="dispatch-review" aria-label="Granskning av vald bunt"><h2>Vald bunt · ${selectedItems.length} order</h2><p>Sorterad efter orderns DelPri och körsätt. Varje order består av följesedel + partibilaga. Detta är endast en granskning; ingen utskrift startas.</p><ol>${reviewRows}</ol></section>`
     : '';
-  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} av ${slot.total} order är klara för utskrift (gröna siffran); redan utskrivna räknas inte som klara. Klicka på ett körsätt för att granska alla order i bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara för utskrift</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
+  ordersView.innerHTML = `<header><div><h1>${dispatchNames[activeDispatchSlot]}</h1><p>${slot.ready} redo att skriva ut · ${slot.printed ?? 0} registrerat utskrivna · ${Math.max(0, slot.total - slot.ready - (slot.printed ?? 0))} ännu inte redo · ${slot.total} order totalt. Registrerat utskrivna betyder bekräftade av skrivarkön, inte fysiskt papper. Klicka på ett körsätt för att granska alla order i bunten. Gruppering och sortering ändrar bara visningen, inte utskriftsordningen.</p></div>${lookupSortControl()}</header><div class="dispatch-selection"><label><input id="selectAllDispatchReady" type="checkbox" ${readyVisible.length ? '' : 'disabled'} ${readyVisible.length > 0 && readyVisible.every(({ order }) => selectedDispatchOrders.has(String(order.orderNumber))) ? 'checked' : ''}> Markera alla klara i sökresultatet</label><span>${selectedItems.length} valda av ${slot.ready} klara för utskrift</span><button id="reviewDispatchSelection" type="button" ${selectedItems.length ? '' : 'disabled'}>Granska vald bunt</button><button class="print-selected" type="button" ${(simulationEnabled || realPrintingEnabled) && selectedItems.length && !activeRealPrint ? '' : 'disabled'} title="${simulationEnabled ? 'Endast virtuell utskrift' : realPrintingEnabled ? 'Riktig utskrift via Print Agent' : 'Utskrift är spärrad i läsläget'}">${simulationEnabled ? 'Simulera valda' : 'Skriv ut valda'}</button></div>${bundles ? `<div class="dispatch-groups">${bundles}</div>` : '<div class="orders-empty">Inga order i denna avgång för valt datum och sökning.</div>'}${review}`;
   ordersView.querySelectorAll('[data-dispatch-group]').forEach((button) => button.addEventListener('click', () => {
     const expanded = button.getAttribute('aria-expanded') !== 'true';
     dispatchGroupOpenOverrides.set(button.dataset.dispatchGroup, expanded);
@@ -741,32 +888,40 @@ function renderDispatchList() {
   }));
 }
 
-async function loadDispatchDashboard(refresh = false) {
+async function loadDispatchDashboard(refresh = false, background = false) {
   const request = ++dispatchRequest;
-  dispatchPayload = null;
-  selectedDispatchOrders.clear();
-  dispatchReviewOpen = false;
-  dispatchGroupOpenOverrides.clear();
+  if (!background) {
+    dispatchPayload = null;
+    selectedDispatchOrders.clear();
+    dispatchReviewOpen = false;
+    dispatchGroupOpenOverrides.clear();
+  }
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
-  if (refresh) params.set('refresh', '1');
-  document.querySelectorAll('[data-dispatch-slot]').forEach((card) => {
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background) document.querySelectorAll('[data-dispatch-slot]').forEach((card) => {
     card.querySelector('b em').textContent = '–';
     card.querySelector('.dispatch-total').textContent = '–';
+    card.querySelector('.dispatch-printed').textContent = '–';
+    card.querySelector('.dispatch-not-ready').textContent = '–';
   });
-  document.querySelector('#dispatchCaution').hidden = true;
-  if (activeView === 'dispatch') ordersView.innerHTML = '<div class="orders-empty">Hämtar följesedlar…</div>';
+  if (!background) document.querySelector('#dispatchCaution').hidden = true;
+  if (!background && activeView === 'dispatch') ordersView.innerHTML = '<div class="orders-empty">Hämtar följesedlar…</div>';
   try {
     const response = await fetch(`/api/dashboard/dispatch?${params}`);
     if (!response.ok) throw new Error('Kunde inte hämta följesedelsavgångar.');
     const payload = await response.json();
-    if (request !== dispatchRequest) return;
+    if (request !== dispatchRequest) return false;
+    if (payload.contextStatus?.available === false) throw new Error('Visma-data kunde inte uppdateras.');
     dispatchPayload = payload;
     renderDispatchCards(payload);
     if (activeView === 'dispatch') renderDispatchList();
+    return true;
   } catch (error) {
-    if (request !== dispatchRequest) return;
+    if (request !== dispatchRequest) return false;
+    if (background) return false;
     renderDispatchCards({ contextStatus: { available: false } });
     if (activeView === 'dispatch') ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
   }
 }
 
@@ -874,27 +1029,33 @@ function renderChainList() {
   }));
 }
 
-async function loadChainDashboard(refresh = false) {
+async function loadChainDashboard(refresh = false, background = false) {
   const request = ++chainRequest;
-  chainPayload = null;
-  selectedChainOrders.clear();
-  chainReviewOpen = false;
+  if (!background) {
+    chainPayload = null;
+    selectedChainOrders.clear();
+    chainReviewOpen = false;
+  }
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
-  if (refresh) params.set('refresh', '1');
-  if (activeView === 'chains') ordersView.innerHTML = '<div class="orders-empty">Hämtar kedjeorder…</div>';
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background && activeView === 'chains') ordersView.innerHTML = '<div class="orders-empty">Hämtar kedjeorder…</div>';
   try {
     const response = await fetch(`/api/dashboard/chains?${params}`);
     if (!response.ok) throw new Error('Kunde inte hämta kedjeorder.');
     const payload = await response.json();
-    if (request !== chainRequest) return;
+    if (request !== chainRequest) return false;
+    if (payload.contextStatus?.available === false) throw new Error('Visma-data kunde inte uppdateras.');
     chainPayload = payload;
     renderChainCards(payload);
     if (activeView === 'chains') renderChainList();
+    return true;
   } catch (error) {
-    if (request !== chainRequest) return;
+    if (request !== chainRequest) return false;
+    if (background) return false;
     chainPayload = null;
     renderChainCards({ contextStatus: { available: false } });
     if (activeView === 'chains') ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
   }
 }
 
@@ -957,10 +1118,22 @@ function renderOrders(payload, view) {
   ordersView.querySelectorAll('[data-order]').forEach((row) => row.addEventListener('click', () => openOrderDetails(orders.find((item) => String(item.orderNumber) === row.dataset.order))));
 }
 
-async function loadOrders(view, refresh = false) {
+async function loadOrders(view, refresh = false, background = false) {
   const request = ++ordersRequest;
-  const params = new URLSearchParams({ status: statuses[view], deliveryDate: deliveryDate.value, q: search.value.trim() }); if (refresh) params.set('refresh', '1'); ordersView.innerHTML = '<div class="orders-empty">Hämtar order…</div>';
-  try { const response = await fetch(`/api/orders?${params}`); if (!response.ok) throw new Error('Kunde inte hämta order.'); const payload = await response.json(); if (request === ordersRequest && activeView === view) renderOrders(payload, view); } catch (error) { if (request === ordersRequest && activeView === view) ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`; }
+  const params = new URLSearchParams({ status: statuses[view], deliveryDate: deliveryDate.value, q: search.value.trim() });
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background) ordersView.innerHTML = '<div class="orders-empty">Hämtar order…</div>';
+  try {
+    const response = await fetch(`/api/orders?${params}`);
+    if (!response.ok) throw new Error('Kunde inte hämta order.');
+    const payload = await response.json();
+    if (payload.contextStatus?.available === false) throw new Error('Visma-data kunde inte uppdateras.');
+    if (request === ordersRequest && activeView === view) renderOrders(payload, view);
+    return request === ordersRequest;
+  } catch (error) {
+    if (!background && request === ordersRequest && activeView === view) ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
+  }
 }
 
 const returnDepartureLabels = { early: 'Tidig', morning: 'Förmiddag', afternoon: 'Eftermiddag', unscheduled: 'Utan avgångstid' };
@@ -1033,27 +1206,33 @@ function renderReturnList(payload) {
   }));
 }
 
-async function loadReturnDashboard(refresh = false) {
+async function loadReturnDashboard(refresh = false, background = false) {
   const request = ++returnRequest;
-  returnPayload = null;
-  selectedReturnOrders.clear();
-  returnReviewOpen = false;
+  if (!background) {
+    returnPayload = null;
+    selectedReturnOrders.clear();
+    returnReviewOpen = false;
+  }
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
-  if (refresh) params.set('refresh', '1');
-  if (activeView === 'returns') ordersView.innerHTML = '<div class="orders-empty">Hämtar returer…</div>';
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background && activeView === 'returns') ordersView.innerHTML = '<div class="orders-empty">Hämtar returer…</div>';
   try {
     const response = await fetch(`/api/returns?${params}`);
     if (!response.ok) throw new Error('Kunde inte hämta returer.');
     const payload = await response.json();
-    if (request !== returnRequest) return;
+    if (request !== returnRequest) return false;
+    if (payload.contextStatus?.available === false) throw new Error('Returdata kunde inte uppdateras.');
     returnPayload = payload;
     renderReturnCard(payload);
     if (activeView === 'returns') renderReturnList(payload);
+    return true;
   } catch (error) {
-    if (request !== returnRequest) return;
+    if (request !== returnRequest) return false;
+    if (background) return false;
     returnPayload = null;
     renderReturnCard({ contextStatus: { available: false } });
     if (activeView === 'returns') ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
   }
 }
 
@@ -1136,27 +1315,33 @@ function renderPickupList(payload, onlyStaff = false) {
   }));
 }
 
-async function loadPickupDashboard(refresh = false) {
+async function loadPickupDashboard(refresh = false, background = false) {
   const request = ++pickupRequest;
-  pickupPayload = null;
+  if (!background) pickupPayload = null;
   const params = new URLSearchParams({ deliveryDate: deliveryDate.value });
-  if (refresh) params.set('refresh', '1');
-  document.querySelector('#pickupCount').textContent = '–';
-  document.querySelector('.pickup-list').innerHTML = '<p class="pickup-empty">Hämtar order…</p>';
-  document.querySelector('.pickup-more').hidden = true;
-  if (activeView === 'pickups' || activeView === 'staff') ordersView.innerHTML = '<div class="orders-empty">Hämtar hämtningar, bud och taxi…</div>';
+  if (refresh) params.set('refresh', refresh === 'auto' ? 'auto' : '1');
+  if (!background) {
+    document.querySelector('#pickupCount').textContent = '–';
+    document.querySelector('.pickup-list').innerHTML = '<p class="pickup-empty">Hämtar order…</p>';
+    document.querySelector('.pickup-more').hidden = true;
+    if (activeView === 'pickups' || activeView === 'staff') ordersView.innerHTML = '<div class="orders-empty">Hämtar hämtningar, bud och taxi…</div>';
+  }
   try {
     const response = await fetch(`/api/pickups?${params}`);
     if (!response.ok) throw new Error('Kunde inte hämta hämtningar, bud och taxi.');
     const payload = await response.json();
-    if (request !== pickupRequest) return;
+    if (request !== pickupRequest) return false;
+    if (payload.contextStatus?.available === false) throw new Error('Hämtningsdata kunde inte uppdateras.');
     pickupPayload = payload;
     renderPickupCard(payload);
     if (activeView === 'pickups' || activeView === 'staff') renderPickupList(payload, activeView === 'staff');
+    return true;
   } catch (error) {
-    if (request !== pickupRequest) return;
+    if (request !== pickupRequest) return false;
+    if (background) return false;
     renderPickupCard({ contextStatus: { available: false } });
     if (activeView === 'pickups' || activeView === 'staff') ordersView.innerHTML = `<div class="orders-empty">${escapeHtml(error.message)}</div>`;
+    return false;
   }
 }
 
@@ -1263,13 +1448,52 @@ document.querySelector('.pickup-more').addEventListener('click', () => {
   if (pickupPayload) renderPickupList(pickupPayload);
   else loadPickupDashboard();
 });
+async function refreshDashboard(mode = 'auto', background = true) {
+  const results = await Promise.all([
+    loadFreightDashboard(mode, background),
+    loadDispatchDashboard(mode, background),
+    loadChainDashboard(mode, background),
+    loadReturnDashboard(mode, background),
+    loadPickupDashboard(mode, background)
+  ]);
+  if (statuses[activeView]) results.push(await loadOrders(activeView, mode, background));
+  const success = results.every(Boolean);
+  showSyncStatus(success);
+  return success;
+}
+
+function canAutoRefresh() {
+  return !document.hidden && !activeRealPrint && !autoRefreshRunning && !initialLoading
+    && ![...document.querySelectorAll('dialog')].some((item) => item.open)
+    && !(activeView === 'freight' && (selectedFreightOrders.size || freightReviewOpen))
+    && !(activeView === 'dispatch' && (selectedDispatchOrders.size || dispatchReviewOpen))
+    && !(activeView === 'chains' && (selectedChainOrders.size || chainReviewOpen))
+    && !(activeView === 'returns' && (selectedReturnOrders.size || returnReviewOpen));
+}
+
+async function maybeAutoRefresh() {
+  if (Date.now() - lastRefreshAttempt < AUTO_REFRESH_MS || !canAutoRefresh()) return;
+  lastRefreshAttempt = Date.now();
+  autoRefreshRunning = true;
+  try { await refreshDashboard('auto', true); }
+  finally {
+    lastRefreshAttempt = Date.now();
+    autoRefreshRunning = false;
+  }
+}
+
 document.querySelector('#refresh').addEventListener('click', async (event) => {
   const button = event.currentTarget;
   button.textContent = '↻ Uppdaterar…';
-  await Promise.all([loadFreightDashboard(true), loadDispatchDashboard(true), loadChainDashboard(true), loadReturnDashboard(true), loadPickupDashboard(true)]);
-  if (statuses[activeView]) await loadOrders(activeView, true);
-  button.textContent = '↻ Uppdatera';
-  showToast('Översikten är uppdaterad');
+  button.disabled = true;
+  lastRefreshAttempt = Date.now();
+  try {
+    const success = await refreshDashboard(true, false);
+    showToast(success ? 'Översikten är uppdaterad' : 'Uppdateringen misslyckades. Kontrollera status och försök igen.');
+  } finally {
+    button.textContent = '↻ Uppdatera';
+    button.disabled = false;
+  }
 });
 search.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
@@ -1303,12 +1527,12 @@ search.addEventListener('keydown', (event) => {
 });
 function dateChanged() {
   syncLookupHistory();
-  loadFreightDashboard();
-  loadDispatchDashboard();
-  loadChainDashboard();
-  loadReturnDashboard();
-  loadPickupDashboard();
-  if (statuses[activeView]) loadOrders(activeView);
+  lastRefreshAttempt = Date.now();
+  syncStatus.textContent = 'Hämtar valt leveransdatum…';
+  const requests = [loadFreightDashboard(), loadDispatchDashboard(), loadChainDashboard(),
+    loadReturnDashboard(), loadPickupDashboard()];
+  if (statuses[activeView]) requests.push(loadOrders(activeView));
+  Promise.all(requests).then((results) => showSyncStatus(results.every(Boolean)));
 }
 deliveryDate.addEventListener('change', dateChanged);
 document.querySelector('.active-date').addEventListener('click', () => { deliveryDate.value = todayInStockholm(); dateChanged(); });
@@ -1316,9 +1540,15 @@ document.querySelector('.active-date + .control-button').addEventListener('click
 deliveryDate.value = todayInStockholm();
 if (history.state?.printwardLookup) restoreLookup(history.state.printwardLookup);
 updateSimulationStatus();
+restoreLastPrintJob();
 loadPrintCapability();
-loadFreightDashboard();
-loadDispatchDashboard();
-loadChainDashboard();
-loadReturnDashboard();
-loadPickupDashboard();
+Promise.all([
+  loadFreightDashboard(), loadDispatchDashboard(), loadChainDashboard(),
+  loadReturnDashboard(), loadPickupDashboard()
+]).then((results) => showSyncStatus(results.every(Boolean)))
+  .finally(() => {
+    initialLoading = false;
+    lastRefreshAttempt = Date.now();
+  });
+setInterval(maybeAutoRefresh, 15_000);
+document.addEventListener('visibilitychange', maybeAutoRefresh);

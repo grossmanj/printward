@@ -29,7 +29,7 @@ import {
   summarizeDispatchCombos,
   summarizeOrders
 } from './documents.js';
-import { buildPrintIndex, createStateStore } from './stateStore.js';
+import { buildPrintIndex, createStateStore, summarizeJobProgress } from './stateStore.js';
 import { freightPanelForOrder, planDashboardPrintSelection, planFreightDocumentSelection, requiresCashInvoice, summarizeChainPanels, summarizeFreightPanels, summarizeOwnDispatch, summarizePickups, summarizeReturnDepartures } from './dashboardRules.js';
 
 const MIME_TYPES = {
@@ -335,6 +335,12 @@ function isPrintCompletionCallback(requestUrl) {
     && Boolean(requestUrl.searchParams.get('token'));
 }
 
+function isPrintProgressCallback(req, requestUrl) {
+  return req.method === 'POST'
+    && /^\/api\/print-jobs\/[^/]+\/progress$/.test(requestUrl.pathname)
+    && Boolean(requestUrl.searchParams.get('token'));
+}
+
 function isPrintJobDocumentRequest(requestUrl) {
   return requestUrl.pathname === '/api/documents'
     && Boolean(requestUrl.searchParams.get('jobId'))
@@ -353,6 +359,7 @@ function requireLogin(req, res, requestUrl, auth) {
     || isAuthenticatedRequest(req, auth)
     || isPublicAssetRequest(req, requestUrl)
     || isPrintCompletionCallback(requestUrl)
+    || isPrintProgressCallback(req, requestUrl)
     || isPrintJobDocumentRequest(requestUrl)
   ) {
     return false;
@@ -398,6 +405,7 @@ function buildManifest(req, job) {
   return {
     jobId: job.id,
     callbackUrl: `${origin}/api/print-jobs/${job.id}/complete${callbackToken}`,
+    progressUrl: `${origin}/api/print-jobs/${job.id}/progress${callbackToken}`,
     orders: job.orders.map((order) => ({
       ...order,
       documents: order.documents.map((document) => ({
@@ -509,10 +517,12 @@ function summarizePrintJob(job, currentByOrderNumber = new Map()) {
     printerName: job.printerName || '',
     options: job.options || {},
     notes: job.notes || '',
+    resumedFromJobId: job.resumedFromJobId || '',
     error: job.error || '',
     orderNumbers,
     orderCount: orderNumbers.length,
     documentCount: jobDocumentCount(job),
+    progress: summarizeJobProgress(job),
     changes: summarizeJobChanges(job, currentByOrderNumber)
   };
 }
@@ -827,7 +837,7 @@ function defaultsForConfig(defaults, config) {
   };
 }
 
-function createOrdersCache(config) {
+export function createOrdersCache(config) {
   return {
     entries: new Map(),
     cacheMs: Math.max(0, Number(config.ordersCacheMs || 0))
@@ -1069,7 +1079,7 @@ async function refreshOrdersCache(storage, store, orderContext, config, cache, o
   return entry.promise;
 }
 
-async function listCurrentOrders(storage, store, orderContext, config, cache, options = {}) {
+export async function listCurrentOrders(storage, store, orderContext, config, cache, options = {}) {
   if (Array.isArray(options.orderNumbers) && options.orderNumbers.length > 0) {
     return buildCurrentOrders(storage, store, orderContext, config, options);
   }
@@ -1084,7 +1094,7 @@ async function listCurrentOrders(storage, store, orderContext, config, cache, op
     return entry.value;
   }
 
-  if (!options.refresh && entry.value) {
+  if (!options.refresh && entry.value && !options.waitForFresh) {
     refreshOrdersCache(storage, store, orderContext, config, cache, options).catch((error) => {
       console.warn(`Order cache refresh failed: ${error.message}`);
     });
@@ -1092,6 +1102,14 @@ async function listCurrentOrders(storage, store, orderContext, config, cache, op
   }
 
   return refreshOrdersCache(storage, store, orderContext, config, cache, options);
+}
+
+function orderRefreshOptions(requestUrl) {
+  const mode = String(requestUrl.searchParams.get('refresh') || '').toLowerCase();
+  return {
+    refresh: mode === '1' || mode === 'true',
+    waitForFresh: mode === 'auto'
+  };
 }
 
 async function listOrdersForPrintJob(storage, store, orderContext, config, cache, orderNumbers, deliveryDate) {
@@ -1187,9 +1205,9 @@ async function handleApi(req, res, requestUrl, context) {
   }
 
   if (req.method === 'GET' && pathname === '/api/orders') {
-    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
+    const refreshOptions = orderRefreshOptions(requestUrl);
     const deliveryDate = requestUrl.searchParams.get('deliveryDate') || '';
-    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { ...refreshOptions, deliveryDate });
     const dateFiltered = filterOrders(orders, { deliveryDate });
     const filtered = filterOrders(dateFiltered, {
       q: requestUrl.searchParams.get('q') || '',
@@ -1214,8 +1232,8 @@ async function handleApi(req, res, requestUrl, context) {
       sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
       return;
     }
-    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
-    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    const refreshOptions = orderRefreshOptions(requestUrl);
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { ...refreshOptions, deliveryDate });
     const dateFiltered = filterOrders(orders, { deliveryDate });
     sendJson(res, 200, {
       deliveryDate,
@@ -1361,8 +1379,8 @@ async function handleApi(req, res, requestUrl, context) {
       sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
       return;
     }
-    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
-    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    const refreshOptions = orderRefreshOptions(requestUrl);
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { ...refreshOptions, deliveryDate });
     sendJson(res, 200, {
       deliveryDate,
       ...summarizeOwnDispatch(filterOrders(orders, { deliveryDate })),
@@ -1377,8 +1395,8 @@ async function handleApi(req, res, requestUrl, context) {
       sendJson(res, 400, { error: 'A deliveryDate in YYYY-MM-DD format is required.' });
       return;
     }
-    const refresh = ['1', 'true'].includes(String(requestUrl.searchParams.get('refresh') || '').toLowerCase());
-    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { refresh, deliveryDate });
+    const refreshOptions = orderRefreshOptions(requestUrl);
+    const { orders, contextStatus } = await listCurrentOrders(storage, store, orderContext, config, ordersCache, { ...refreshOptions, deliveryDate });
     sendJson(res, 200, {
       deliveryDate,
       panels: summarizeChainPanels(filterOrders(orders, { deliveryDate })),
@@ -1590,6 +1608,58 @@ async function handleApi(req, res, requestUrl, context) {
     return;
   }
 
+  const resumeMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/resume$/);
+  if (req.method === 'POST' && resumeMatch) {
+    if (!config.dashboardPrintingEnabled) {
+      sendJson(res, 403, { error: 'Dashboard printing is not enabled on this service.' });
+      return;
+    }
+    const previousJob = await store.getJob(resumeMatch[1]);
+    if (!previousJob) {
+      sendJson(res, 404, { error: 'Print job not found.' });
+      return;
+    }
+    if (previousJob.status !== 'failed' || !String(previousJob.notes || '').startsWith('Dashboard ')) {
+      sendJson(res, 409, { error: 'Only a failed dashboard job can be resumed.' });
+      return;
+    }
+    const confirmed = new Set((previousJob.confirmedOrderNumbers || []).map(String));
+    const remainingOrderNumbers = jobOrderNumbers(previousJob).filter((number) => !confirmed.has(number));
+    if (!remainingOrderNumbers.length) {
+      sendJson(res, 409, { error: 'No unconfirmed orders remain in this job.' });
+      return;
+    }
+    const priorResume = await store.findResumeJob(previousJob.id);
+    if (priorResume) {
+      sendJson(res, 409, { error: `This job was already resumed as ${priorResume.id}. Check that run before printing again.` });
+      return;
+    }
+    const remaining = new Set(remainingOrderNumbers);
+    const body = await readJsonBody(req);
+    const job = await store.createJob({
+      createdBy: body.user || previousJob.createdBy,
+      printerName: body.printerName || previousJob.printerName || '',
+      options: body.options || previousJob.options || {},
+      orders: structuredClone((previousJob.orders || []).filter((section) =>
+        !isSeparatorOrder(section) && remaining.has(String(section.orderNumber)))),
+      notes: `Dashboard resume of ${previousJob.id}`,
+      resumedFromJobId: previousJob.id,
+      callbackToken: randomToken()
+    });
+    eventHub.broadcast('print-job-resumed', {
+      jobId: job.id,
+      previousJobId: previousJob.id,
+      orderNumbers: remainingOrderNumbers
+    });
+    sendJson(res, 201, {
+      job,
+      manifest: buildManifest(req, job),
+      remainingOrderNumbers,
+      confirmedOrderNumbers: [...confirmed]
+    });
+    return;
+  }
+
   const manifestMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/manifest$/);
   if (req.method === 'GET' && manifestMatch) {
     const job = await store.getJob(manifestMatch[1]);
@@ -1598,6 +1668,42 @@ async function handleApi(req, res, requestUrl, context) {
       return;
     }
     sendJson(res, 200, { job, manifest: buildManifest(req, job) });
+    return;
+  }
+
+  const progressMatch = pathname.match(/^\/api\/print-jobs\/([^/]+)\/progress$/);
+  if (req.method === 'GET' && progressMatch) {
+    const job = await store.getJob(progressMatch[1]);
+    if (!job) {
+      sendJson(res, 404, { error: 'Print job not found.' });
+      return;
+    }
+    sendJson(res, 200, { jobId: job.id, progress: summarizeJobProgress(job) });
+    return;
+  }
+  if (req.method === 'POST' && progressMatch) {
+    const jobId = progressMatch[1];
+    const body = await readJsonBody(req);
+    const token = requestUrl.searchParams.get('token') || body.token || '';
+    const existingJob = await store.getJob(jobId);
+    if (!existingJob) {
+      sendJson(res, 404, { error: 'Print job not found.' });
+      return;
+    }
+    if (!existingJob.callbackToken || !safeEqual(token, existingJob.callbackToken)) {
+      sendJson(res, 401, { error: 'Invalid print job token.' });
+      return;
+    }
+    try {
+      const job = await store.updateJobProgress(jobId, body);
+      eventHub.broadcast('print-job-progress', {
+        jobId: job.id,
+        progress: summarizeJobProgress(job)
+      });
+      sendJson(res, 200, { jobId: job.id, progress: summarizeJobProgress(job) });
+    } catch (error) {
+      sendJson(res, 409, { error: error.message });
+    }
     return;
   }
 

@@ -79,18 +79,56 @@ test('freight bulk leaves orders without chilled/frozen booking visible but unse
   assert.match(script, /function hasTemperatureBooking\(order\)/);
   assert.match(script, /const selectableVisible = visibleItems\.filter\(freightBulkCandidate\)/);
   assert.match(script, /panel\.orders\.filter\(freightBulkCandidate\)/);
-  assert.match(script, /Bokningsnummer saknas · kvar i listan/);
+  assert.match(script, /Ingen utskriftsbar bokning · ny utskrift spärrad/);
   assert.match(script, /Markera alla utskriftsbara i listan/);
   assert.match(script, /printDashboardItems\(kind, panelId, label, items, \{ bulkFreight: kind === 'freight' \}\)/);
   assert.match(script, /bulkFreight: selectedItems\.length > 1/);
   assert.match(script, /body: JSON\.stringify\(\{[^]*bulkFreight,/);
 });
 
+test('all tracked freight cards use a compact count and keep print status visible without a booking', () => {
+  assert.equal((html.match(/class="freight-total"/g) || []).length, 3);
+  assert.equal((html.match(/order utskrivna<\/small>/g) || []).length, 3);
+  assert.doesNotMatch(html, /<small>med PDF(?: \(ej verifierade\))?<\/small>|<small>med dokument<\/small>/);
+  assert.doesNotMatch(html, /med dokument|med PDF \(ej verifierade\)/);
+  assert.equal((html.match(/class="freight-card-note"/g) || []).length, 3);
+  assert.match(script, /panel\?\.documentTracking \? panel\.printed : panel\?\.departureCount/);
+  assert.match(script, /\$\{Math\.max\(0, \(panel\?\.total \?\? 0\) - \(panel\?\.printed \?\? 0\)\)\} återstår/);
+  assert.match(script, /PDF finns · \$\{statusLabel\(printStatus\)\}/);
+  assert.match(script, /const bookingWarning = panel\.documentTracking && !hasTemperatureBooking\(order\)/);
+  assert.match(script, /PDF-innehållet kontrolleras först vid granskning eller utskrift/);
+  assert.match(script, /if \(jobCreated\) \{\s*try \{\s*await refreshAfterPrint\(\)/);
+  assert.match(script, /async function refreshAfterPrint\(\) \{\s*await Promise\.all\(\[loadFreightDashboard\(true\)/);
+});
+
 test('own-car cards show Edmarks departure times and clarify ready versus total', () => {
-  assert.match(html, /<time>Före 08:00<\/time>/);
+  assert.match(html, /Alla order för valt leveransdatum, även de som inte ingår i en utskriftsgrupp/);
+  assert.equal((html.match(/redo för utskrift av/g) || []).length, 3);
+  assert.match(html, /<time>Senast 08:00<\/time>/);
   assert.match(html, /<time>09:00–10:00<\/time>/);
-  assert.match(html, /<time>13:00–16:00<\/time>/);
-  assert.match(script, /redan utskrivna räknas inte som klara/);
+  assert.match(html, /<time>Från 13:00<\/time>/);
+  assert.equal((html.match(/class="dispatch-printed"/g) || []).length, 3);
+  assert.equal((html.match(/class="dispatch-not-ready"/g) || []).length, 3);
+  assert.match(script, /Registrerat utskrivna betyder bekräftade av skrivarkön/);
+});
+
+test('dashboard exposes spool progress and only manual recovery of unfinished whole orders', () => {
+  assert.match(html, /id="printJobProgress"/);
+  assert.match(html, /id="resumePrintJob"/);
+  assert.match(script, /completedSections.*totalSections/s);
+  assert.match(script, /Kontrollera först vad som faktiskt kommit ut ur skrivaren/);
+  assert.match(script, /\/api\/print-jobs\/\$\{encodeURIComponent\(previousJobId\)\}\/resume/);
+  assert.match(script, /printward:lastPrintJobId/);
+});
+
+test('dashboard polls visible data every two minutes without clearing an active selection', () => {
+  assert.match(html, /id="syncStatus"/);
+  assert.match(script, /const AUTO_REFRESH_MS = 120_000/);
+  assert.match(script, /setInterval\(maybeAutoRefresh, 15_000\)/);
+  assert.match(script, /document\.addEventListener\('visibilitychange', maybeAutoRefresh\)/);
+  assert.match(script, /activeView === 'dispatch' && \(selectedDispatchOrders\.size \|\| dispatchReviewOpen\)/);
+  assert.match(script, /if \(!background\) \{\s*dispatchPayload = null;\s*selectedDispatchOrders\.clear\(\)/);
+  assert.match(script, /refreshDashboard\('auto', true\)/);
 });
 
 test('overview search opens an all-status, date-scoped lookup with city and route columns', () => {
