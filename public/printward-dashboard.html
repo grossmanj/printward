@@ -123,7 +123,7 @@
       </form>
     </dialog>
     <section id="printJobProgress" class="print-job-progress" role="status" aria-live="polite" hidden>
-      <strong>Utskriftskörning</strong>
+      <div class="print-job-progress-header"><strong id="printJobProgressTitle">Utskriftskörning</strong><button id="closePrintJobProgress" type="button" aria-label="Dölj utskriftskörning" title="Dölj rutan (utskriften fortsätter)">×</button></div>
       <p id="printJobProgressText">Förbereder utskrift…</p>
       <progress id="printJobProgressBar" max="1" value="0"></progress>
       <small>Bekräftat av skrivarkön betyder inte att papperet kommit ut. Kontrollera skrivaren vid stopp.</small>

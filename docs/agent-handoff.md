@@ -1390,3 +1390,16 @@ are verification needs, not claims that the running system is broken.
 - Local bundled Node CLI passed 136/136 tests and `git diff --check` passed;
   `npm test` was unavailable on the Mac because `npm` is not installed there,
   while the successful Cloud Build ran `npm ci` and `npm test` before deployment.
+
+### 2026-10-13 dismissible print progress (local work)
+
+- After the demo test, Edmark reported that the fixed progress panel kept
+  covering the screen even after the print count updated. The panel now has a
+  dismiss button that does not cancel the print job. It stays expanded during
+  printing, condenses to a small status line after spool confirmation, and a
+  failed run reopens the full panel so manual recovery is visible. A completed
+  run is cleared from browser persistence and will not reappear on reload;
+  active/failed runs still restore.
+- The Ricoh may still pause between individual Windows spool jobs. The agent
+  deliberately keeps per-order/per-temperature sections separate for correct
+  stapling. This UI change does not merge those spool jobs or change the agent.

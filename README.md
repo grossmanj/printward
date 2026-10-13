@@ -713,8 +713,11 @@ sections confirmed remains unprinted at order level. The dashboard refreshes
 status after both successful and failed agent responses. Spool confirmation
 does not prove physical paper output; inspect a failed queue before retrying.
 With the updated agent, a dashboard print run shows completed/remaining sections
-and whole orders as each section reaches the spooler. The last run remains
-visible after a page reload. If a run fails, **Återuppta återstående order**
+and whole orders as each section reaches the spooler. The panel is expanded
+while printing, condenses to a dismissible status line after spool confirmation,
+and expands again on failure. Dismissing it does not cancel the job.
+A completed run does not reappear after page reload, while active and failed runs
+remain available. If a run fails, **Återuppta återstående order**
 creates a new job from the original document snapshot, excluding only complete
 orders confirmed by the spooler. A partially printed chilled/frozen order is
 reprinted from its first section. Recovery is manual, never automatic: clear

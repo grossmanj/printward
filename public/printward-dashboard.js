@@ -6,8 +6,10 @@ const title = document.querySelector('#dialogTitle');
 const detail = document.querySelector('#dialogDetail');
 const toast = document.querySelector('#toast');
 const printProgressPanel = document.querySelector('#printJobProgress');
+const printProgressTitle = document.querySelector('#printJobProgressTitle');
 const printProgressText = document.querySelector('#printJobProgressText');
 const printProgressBar = document.querySelector('#printJobProgressBar');
+const closePrintProgressButton = document.querySelector('#closePrintJobProgress');
 const resumePrintButton = document.querySelector('#resumePrintJob');
 const grid = document.querySelector('.grid');
 const ordersView = document.querySelector('#ordersView');
@@ -221,12 +223,18 @@ async function testPrinterSettings() {
 function renderPrintProgress(progress) {
   const { status, completedSections = 0, totalSections = 0, completedOrders = 0,
     totalOrders = 0, remainingOrders = 0, currentOrderNumber } = progress;
+  printProgressPanel.classList.toggle('is-complete', status === 'printed');
+  printProgressTitle.textContent = status === 'printed' ? 'Skickat till skrivarkön' : 'Utskriftskörning';
   printProgressBar.max = Math.max(1, totalSections);
   printProgressBar.value = completedSections;
   if (status === 'printed') {
-    printProgressText.textContent = `Klart: ${totalOrders} order, ${totalSections} buntar bekräftade av skrivarkön.`;
+    printProgressText.textContent = `${totalOrders} order · ${totalSections} buntar. Kontrollera papper vid skrivaren.`;
+    try {
+      if (localStorage.getItem('printward:lastPrintJobId') === progressJobId) localStorage.removeItem('printward:lastPrintJobId');
+    } catch { /* Optional browser persistence. */ }
   } else if (status === 'failed') {
     printProgressText.textContent = `Avbruten: ${completedOrders} av ${totalOrders} hela order bekräftade. ${remainingOrders} order återstår. Kontrollera utskrifterna innan återstart.`;
+    printProgressPanel.hidden = false;
   } else if (!agentReportsProgress) {
     printProgressText.textContent = 'Utskrift pågår. Den lokala agenten behöver uppdateras för att visa löpande förlopp.';
   } else {
@@ -266,15 +274,18 @@ function restoreLastPrintJob() {
   if (!jobId) return;
   progressJobId = jobId;
   agentReportsProgress = true;
-  printProgressPanel.hidden = false;
-  printProgressText.textContent = 'Hämtar senaste utskriftskörningen…';
-  refreshPrintProgress(jobId).catch(() => {
-    printProgressPanel.hidden = true;
-    clearInterval(progressTimer);
-    progressTimer = null;
-  });
-  progressTimer = setInterval(() => refreshPrintProgress(jobId).catch(() => {}), 1500);
+  refreshPrintProgress(jobId).then((progress) => {
+    if (progressJobId !== jobId || progress.status === 'printed') return;
+    printProgressPanel.hidden = false;
+    if (progress.status !== 'failed') {
+      progressTimer = setInterval(() => refreshPrintProgress(jobId).catch(() => {}), 1500);
+    }
+  }).catch(() => { /* Keep the job ID for another refresh if the server is temporarily unavailable. */ });
 }
+
+closePrintProgressButton.addEventListener('click', () => {
+  printProgressPanel.hidden = true;
+});
 
 async function sendManifestToAgent(manifest, defaults) {
   const printed = await fetch(`${defaults.agentUrl}/print`, {

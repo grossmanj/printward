@@ -121,6 +121,17 @@ test('dashboard exposes spool progress and only manual recovery of unfinished wh
   assert.match(script, /printward:lastPrintJobId/);
 });
 
+test('completed print progress can be dismissed and does not return on reload', () => {
+  assert.match(html, /id="closePrintJobProgress"[^>]*aria-label="Dölj utskriftskörning"/);
+  assert.match(html, /id="printJobProgressTitle"/);
+  assert.match(script, /closePrintProgressButton\.addEventListener\('click', \(\) => \{\s*printProgressPanel\.hidden = true/);
+  assert.match(script, /printProgressPanel\.classList\.toggle\('is-complete', status === 'printed'\)/);
+  assert.match(script, /Skickat till skrivarkön/);
+  assert.match(script, /if \(localStorage\.getItem\('printward:lastPrintJobId'\) === progressJobId\) localStorage\.removeItem\('printward:lastPrintJobId'\)/);
+  assert.match(script, /if \(progressJobId !== jobId \|\| progress\.status === 'printed'\) return/);
+  assert.match(script, /status === 'failed'[\s\S]*?printProgressPanel\.hidden = false/);
+});
+
 test('dashboard polls visible data every two minutes without clearing an active selection', () => {
   assert.match(html, /id="syncStatus"/);
   assert.match(script, /const AUTO_REFRESH_MS = 120_000/);
