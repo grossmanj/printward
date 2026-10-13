@@ -205,7 +205,7 @@ export async function extractPdfPages(body, selection) {
   return extractPdfPageIndices(sourceBody, indices);
 }
 
-// Visma's verified Följesedel NettoNetto(2050/2101) forms print the transport value
+// Visma's verified Följesedel NettoNetto(2050/2101/2514) forms print the transport value
 // in a fixed field. The source object is never changed: only a job-authorized
 // download receives the registration captured from the current order context.
 export async function stampVismaPackingSlipRegistration(body, registration) {
@@ -216,8 +216,8 @@ export async function stampVismaPackingSlipRegistration(body, registration) {
 
   const pdfLib = await import('pdf-lib');
   const pdf = await pdfLib.PDFDocument.load(Buffer.isBuffer(body) ? body : Buffer.from(body));
-  if (!/Följesedel NettoNetto\((?:2050|2101)\)/i.test(pdf.getTitle() || '')) {
-    throw new Error('The packing slip is not a verified Visma form (2050 or 2101).');
+  if (!/Följesedel NettoNetto\((?:2050|2101|2514)\)/i.test(pdf.getTitle() || '')) {
+    throw new Error('The packing slip is not a verified Visma form (2050, 2101 or 2514).');
   }
 
   const font = await pdf.embedFont(pdfLib.StandardFonts.TimesRoman);

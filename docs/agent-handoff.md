@@ -1425,12 +1425,12 @@ are verification needs, not claims that the running system is broken.
   only after its separate automatic booking integration is ready. Nothing is
   scheduled or enabled yet.
 
-### 2026-10-13 manual Kyl & Frys print-status registration (local only)
+### 2026-10-13 manual Kyl & Frys print-status registration and route-on-paper fix (demo deployed)
 
 - The owner asked to select Kyl & Frys orders already printed outside
   Printward, register them as printed, close the lookup, and immediately update
-  the overview counter. This has been implemented locally but **not pushed or
-  deployed** at the owner's explicit request to wait. It does not create a
+  the overview counter. This was initially held locally at the owner's request,
+  then pushed and deployed to demo after the owner approved the release. It does not create a
   print job, contact the Print Agent, or call nShift. The user confirms the
   selection before the status write. It marks the order's current pallet PDF
   generation, not an individual chilled/frozen booking; existing PDF without
@@ -1456,8 +1456,34 @@ are verification needs, not claims that the running system is broken.
   1993310 (two-page form 2101) were rendered and inspected with `UEJ 64A`
   replacing `SYD` on each page. The transformation checks the form title,
   page dimensions, field text/coordinates, and plate shape, failing closed on
-  unknown layouts. It is **not deployed or physically printed yet**; do not
-  describe the paper fix as live until a demo deploy and one-page physical
-  verification. Retry preserves the captured registration, so a new job is
+  unknown layouts. Retry preserves the captured registration, so a new job is
   required after later rerouting. The existing unmodified source-PDF preview
   may still show the old route.
+- Deployment evidence: commit `c700e8ab0b1b967cde62f677f484cb11daaec752`
+  was pushed to `origin/demo` and its remote SHA verified. The full Node test
+  suite passed (147 tests). Cloud Run `printward-demo` in `europe-north1` showed
+  image tag `c700e8ab0b1b967cde62f677f484cb11daaec752`, healthy service,
+  and revision `printward-demo-00041-rl6` serving 100% of traffic on
+  2026-10-13 around 12:30 Stockholm time. No physical print of this release
+  has yet been confirmed; test one freshly printed own-car packing slip before
+  relying on the registration stamp operationally. `printward-prod`, the
+  Windows agent, nShift, and freight scheduler were not changed in this step.
+
+### 2026-10-13 Visma form 2514 print failure (demo follow-up)
+
+- The first own-car paper test after revision `printward-demo-00041-rl6` failed
+  before printing. Cloud Run request logs showed `GET /api/documents` returning
+  500 for order 1993740 while the agent reported a failed document download;
+  the job creation itself succeeded. The stored PDF title is
+  `Följesedel NettoNetto(2514).pdf`, which the route stamp's form allow-list
+  did not yet include. The source PDF shows the stale transport value
+  `Kungsholmen`, while current order `DelMt` is registration `PST 18A`.
+- Form 2514 was inspected: A4 size and the transport label/value coordinates
+  match the previously verified 2050/2101 forms. The allow-list now includes
+  2514 while retaining all existing field and layout checks. A stamped copy of
+  the actual order 1993740 PDF was rendered and visually checked with `PST 18A`
+  in the correct position. The original source object was not modified.
+  Synthetic form-2514 regression coverage was added; the full Node test suite
+  passed (148 tests). This follow-up still requires its own demo deployment and
+  one physical print confirmation; the previous Cloud Run revision remains
+  unchanged until that deployment is verified.

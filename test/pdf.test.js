@@ -47,6 +47,8 @@ test('replaces only the verified Visma slip transport field on the print copy', 
 
   const alternate = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2101).pdf' });
   assert.ok((await stampVismaPackingSlipRegistration(alternate, 'UEJ 64A')).length > 0);
+  const latest = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2514).pdf' });
+  assert.ok((await stampVismaPackingSlipRegistration(latest, 'PST 18A')).length > 0);
 });
 
 test('rejects unverified Visma layouts and invalid registration text', async () => {
