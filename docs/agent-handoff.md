@@ -588,8 +588,15 @@ are verification needs, not claims that the running system is broken.
 ## First follow-up after manual printing: cutoff-triggered freight jobs
 
 - Owner priority: once new Printward's manual freight output has been verified,
-  investigate scheduled printing at route-specific order cutoffs. Already
-  printed *document generations* must be skipped; queued/created jobs are not
+  investigate scheduled printing at route-specific order cutoffs. Edmark should
+  be able to configure it in a Printward admin view: select a freight group
+  (for example Kyl & Frys), a local print time, and weekdays on which to print
+  every eligible freight document available at that cutoff. Reuse the normal
+  Printward document verification, per-order/temperature sections, selected
+  local printer queue and staple settings, status tracking and manual recovery;
+  do not build a direct SQL-to-printer path. No automatic printing is enabled
+  by the current demo deployment.
+- Already printed *document generations* must be skipped; queued/created jobs are not
   proof of printing, and concurrent manual/automatic requests need an atomic
   reservation or equivalent idempotency mechanism. The current print status
   index is generation-aware, but `createJob` does not yet reserve or deduplicate
@@ -1362,3 +1369,24 @@ are verification needs, not claims that the running system is broken.
   eligibility, printer behavior, or print-event semantics.
 - No GitHub push, demo/production deploy, Windows-agent update, or physical
   print was performed for this wording change.
+
+### 2026-10-13 demo deployment and follow-up (verified)
+
+- Owner approved deploying the dashboard/status and recoverable-job changes to
+  demo for testing. Commit `a67d80456ce3f6be8ac50ede8e825f5b2df6a99d` was
+  pushed to `origin/demo`; `git ls-remote` confirmed the same SHA. Cloud Build
+  run `d98c24d3` for the `printward-demo` trigger completed successfully, and
+  the Cloud Run `printward-demo` container in `europe-north1` showed the image
+  tag `a67d80456ce3f6be8ac50ede8e825f5b2df6a99d` as healthy and serving.
+- Before deployment, the live demo service was checked: SQL Server order
+  context, Datastore state, app login, and dashboard printing were enabled;
+  nShift fetching, cache warmup, and legacy printing were disabled. The live
+  dashboard subsequently showed the new own-car ready/printed/remaining
+  wording and Kyl & Frys registered-print count. An unauthenticated `/api/health`
+  request returned 401 because app authentication is enabled. No physical
+  printing, live nShift fetch, freight scheduler change, production deploy, or
+  Windows-agent update was performed. The new per-section progress/preparation
+  features require a separate Windows-agent update on each PC.
+- Local bundled Node CLI passed 136/136 tests and `git diff --check` passed;
+  `npm test` was unavailable on the Mac because `npm` is not installed there,
+  while the successful Cloud Build ran `npm ci` and `npm test` before deployment.
