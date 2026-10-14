@@ -1546,3 +1546,66 @@ are verification needs, not claims that the running system is broken.
   The automatic freight-print scheduler is still only a requirement, not an
   enabled job. Its lack of pending-job deduplication and a cloud-to-local-agent
   path must be addressed separately before scheduling printing.
+
+### Future requirement: multiple interface languages (2026-10-13)
+
+- Management wants Printward prepared for Swedish, English and Danish (`sv`,
+  `en`, `da`). Swedish remains the current interface language; translation and
+  a language selector are not implemented yet.
+- When planning new interface work, account for translatable labels, print
+  statuses, errors and admin settings instead of assuming Swedish-only text.
+  Decide how the user's language is selected, persisted and used as a fallback
+  before implementation.
+- The language of generated packing slips, freight documents and third-party
+  Visma/nShift PDFs is a separate scope decision. Do not translate or alter
+  those documents merely because the Printward interface supports more
+  languages.
+- This is a planning note only. No runtime behavior, agent, deployment or
+  external configuration changed for this requirement.
+
+### 2026-10-14 paper-jam feedback and local print-flow optimization
+
+- Edmark reported that a chain **Följesedlar med krav på utskrift** batch
+  printed one customer, then stopped. The screenshot says the Windows agent
+  could not confirm an Event 307 completion on queue `printwarddirekt` during
+  manual resume. The owner later reported a physical paper jam. Chain and
+  ordinary dispatch slips already use the same dashboard endpoint, two-PDF
+  packet builder and local agent. This is not a separate chain-only printing
+  algorithm. The existing agent stops the whole batch on an unconfirmed
+  Windows section so it does not falsely mark documents printed. A new
+  two-order chain regression test verifies separate slip/attachment sections
+  through the same endpoint. The route-registration PDF stamp is for confirmed
+  own-car orders, not remote-freight chain orders; the prior route-stamp PDF
+  download failure is distinct from this Windows spool-confirmation error.
+- A bulk selection is one logical Printward run, but the current
+  SumatraPDF/Windows-queue path submits one OS job per stapled order packet.
+  Combining customers into a single PDF would break per-order stapling. The
+  agent prefetches next sections already. Locally staged: PDFs within each
+  section download concurrently but retain their manifest order when merged.
+  Progress callbacks to Cloud Run remain ordered but no longer block submission
+  of the next printer section; the final completion callback waits for the
+  progress queue. Windows Event 307 confirmation still gates each section, and
+  paper jams still stop the run. These agent changes are not active on any PC
+  until separately installed and physically checked. Windows-side timing and
+  queue-event profiling is still needed to reduce the remaining pause safely.
+- Read-only demo UI inspection for delivery date 2026-10-14 found Sea Street
+  Umeå **1991588** and Sora Sushi/Jönköping **1991567**. Both show chilled
+  and frozen booking numbers and a stored pallet PDF that is **registered as
+  printed**, while their packing slip and attachment are not printed. That
+  explains why the Kyl bulk action skipped them; it does **not** prove the
+  physical freight packets were received. The separate freight PDF entries
+  also show pending, but the pallet bundle is the authoritative Kyl packet.
+  The owner says a PDF of some kind may be missing; page-level content of
+  these live PDFs was **not** verified because the authenticated demo tab
+  closed during inspection. Do not claim the labels/waybills are complete
+  without a read-only PDF preflight.
+- Explicit reprinting of a freight order already registered as printed is
+  deferred. No actual print, nShift call, GitHub push, Cloud Run deployment or
+  Windows agent installation was made for this local change.
+- The owner expects a more stable/faster physical printer in about three
+  weeks. Configure and validate its queue, per-order stapling and confirmation
+  when it arrives; this is not a reason to weaken the current safeguards.
+- Verification: bundled Node runtime `node --test --test-reporter=spec` passed
+  150/150 tests; `git diff --check` passed. `npm test` could not run because npm
+  is not on this host's PATH. No Windows or physical-printer speed benchmark
+  was run, so the size of the real-world improvement remains unverified.

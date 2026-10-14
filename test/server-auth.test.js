@@ -147,6 +147,36 @@ test('dashboard print endpoint requires an explicit feature flag and a fresh eli
   assert.equal(payload.job.notes, 'Dashboard dispatch: early (2026-06-25)');
 });
 
+test('chain batch uses the same two-document sections as ordinary slips', async (t) => {
+  const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-chain-batch-'));
+  t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));
+  const contexts = JSON.parse(await fs.readFile(path.join(projectRoot, 'data', 'mock-order-context.json'), 'utf8'));
+  for (const context of contexts.filter((item) => ['1001', '1004'].includes(item.orderNumber))) {
+    context.customerChainNo = 41;
+    context.distributorNo = 50000000;
+    context.deliveryMethod = 47;
+    context.deliveryMethodName = 'Fjärrgods';
+  }
+  const fixturePath = path.join(fixtureDir, 'orders.json');
+  await fs.writeFile(fixturePath, JSON.stringify(contexts));
+  const handler = await createAuthHandler(t, {
+    PRINTWARD_AUTH_ENABLED: 'false', PRINTWARD_DASHBOARD_PRINT_ENABLED: 'true',
+    MOCK_ORDER_CONTEXT: fixturePath
+  });
+  const response = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'chain', panelId: 'sushi-yama',
+      deliveryDate: '2026-06-25', orderNumbers: ['1001', '1004'] })
+  });
+  assert.equal(response.status, 201, await response.text());
+  const { job, manifest } = await response.json();
+  assert.equal(job.notes, 'Dashboard chain: sushi-yama (2026-06-25)');
+  assert.deepEqual(manifest.orders.map((order) => order.documents.map((document) => document.type)), [
+    ['packingSlip', 'attachment'], ['packingSlip', 'attachment']
+  ]);
+  assert.ok(manifest.orders.every((order) => order.documents.every((document) => !document.routeRegistration)));
+});
+
 test('pickup dashboard exposes print readiness and only creates non-cash slip jobs', async (t) => {
   const fixtureDir = await fs.mkdtemp(path.join(tmpdir(), 'printward-pickup-test-'));
   t.after(() => fs.rm(fixtureDir, { recursive: true, force: true }));

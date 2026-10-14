@@ -344,6 +344,22 @@ not that paper was physically collected. If no event arrives, the job fails with
 an instruction to check the queue and printer before retrying, since delayed
 output remains possible. The Windows PrintService Operational log must be
 enabled. Do not use a physical printer as an automated test.
+Each stapled order packet still needs its own Windows print job so the printer
+can staple at the order boundary. A single merged PDF would staple multiple
+customers together with the current SumatraPDF/queue setup. The per-order
+spool-confirmation wait is also a speed cost; reducing it without losing
+reliable per-order status requires a separate verified Windows-side design.
+After a paper jam, check the physical stack and Windows queue before resuming:
+an unconfirmed section may still print late. The agent deliberately stops
+submitting later sections until the operator resolves the ambiguity.
+Locally staged, not yet installed on a Windows PC: the agent downloads the
+documents of each section concurrently (while merging them in the original
+order) and overlaps ordered status reporting with preparation/submission of
+the next section. The final job callback waits for those reports. This can
+remove cloud-reporting pauses from multi-order runs, but each separately
+stapled section still requires its own Windows job and spool confirmation.
+Physical speed and finishing must be checked after a separate agent update.
+The planned replacement printer also needs its own queue/finishing validation.
 The Windows installer writes the agent start command and Startup launcher with
 `%LOCALAPPDATA%` expanded at runtime, so Windows profile paths with non-ASCII
 characters work even though those launcher files are ASCII. If installation

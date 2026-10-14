@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { PDFDocument } from 'pdf-lib';
+import { createPrintProgressQueue } from './printProgressQueue.js';
 import { confirmWindowsSpool, getPrintedEvents, newestPrintedEventId } from './windows-spool.js';
 import { agentOriginAllowed, allowedAgentOrigins } from './agentAccess.js';
 
@@ -247,10 +248,10 @@ async function printWithSumatra(order, files, printerName, options, dir, prepare
 async function preparePrintSection(order, sectionIndex, dir, signal) {
   const sectionDir = path.join(dir, `section-${sectionIndex}`);
   await fs.mkdir(sectionDir);
-  const files = [];
-  for (const document of order.documents || []) {
-    files.push(await downloadDocument(document, sectionDir, signal));
-  }
+  // Independent PDFs can download together; Promise.all retains the manifest
+  // order needed by the merged, stapled packet.
+  const files = await Promise.all((order.documents || []).map((document) =>
+    downloadDocument(document, sectionDir, signal)));
   const packetPath = files.length && os.platform() === 'win32'
     ? await mergePdfFiles(files, path.join(sectionDir, safeFileName(`order-${order.orderNumber}-packet.pdf`)))
     : null;
@@ -325,6 +326,7 @@ async function handlePrint(body) {
   const results = [];
   const prefetchAbort = new AbortController();
   const preparedSections = new Map();
+  const progressQueue = createPrintProgressQueue((payload) => reportProgress(progressUrl, payload));
   const startPrefetch = (index) => {
     if (index >= orders.length || preparedSections.has(index)) return;
     // Keep at most the current and next two sections in flight. A failed
@@ -343,19 +345,16 @@ async function handlePrint(body) {
       const result = await printOrder(order, preparedResult.prepared, printerName, options);
       if (result.skipped) throw new Error(`Print section ${sectionIndex + 1} has no documents.`);
       results.push(result);
-      try {
-        await reportProgress(progressUrl, {
-          sectionIndex,
-          orderNumber: result.orderNumber,
-          spoolConfirmed: result.spoolConfirmed === true
-        });
-      } catch (error) {
-        // The final callback still carries the confirmed prefix if this
-        // intermediate status update cannot reach Printward.
-        console.warn(error.message);
-      }
+      progressQueue.enqueue({
+        sectionIndex,
+        orderNumber: result.orderNumber,
+        spoolConfirmed: result.spoolConfirmed === true
+      });
     }
 
+    // Preserve status ordering: the final callback follows the last progress
+    // update, but network latency no longer pauses every printer submission.
+    await progressQueue.drain();
     await reportCompletion(callbackUrl, {
       status: 'printed',
       user,
@@ -366,6 +365,7 @@ async function handlePrint(body) {
 
     return { ok: true, jobId, results };
   } catch (error) {
+    await progressQueue.drain();
     await reportCompletion(callbackUrl, {
       status: 'failed',
       user,
