@@ -1609,3 +1609,61 @@ are verification needs, not claims that the running system is broken.
   150/150 tests; `git diff --check` passed. `npm test` could not run because npm
   is not on this host's PATH. No Windows or physical-printer speed benchmark
   was run, so the size of the real-world improvement remains unverified.
+
+### 2026-10-14 demo publication evidence
+
+- After the owner's explicit demo-release request, branch `demo` was pushed by
+  normal fast-forward from `6551054` to `6dd87442ae9ba14d34772de0744ba11fad4138f4`;
+  `git ls-remote` confirmed the remote branch SHA. This push included the
+  previously staged pickup/bud/taxi change `4796acb` and the shared agent
+  preparation/progress change plus chain-batch regression test `6dd8744`.
+- The authenticated Printward-demo page subsequently served the new pickup
+  controls (`Skriv ut` enabled on ready non-cash pickup rows and `printStaff`
+  in place of the old simulation-only control). The demo URL responded with a
+  login redirect in a separate HTTP probe. This is evidence of the updated web
+  build reaching demo; Cloud Build's exact build status/revision was not read
+  because Cloud Console required reauthentication. Production was not pushed.
+- **The Windows agent on W10 was not updated.** Demo web deployment alone does
+  not activate the agent speed change there and does not fix an unconfirmed
+  Windows Event 307. The owner is away from W10; Edmark may test the existing
+  chain printing after the paper jam, but physical success is still unverified.
+
+### 2026-10-15 incomplete Kyl pallet PDFs and targeted repair
+
+- Read-only demo inspection for delivery date 2026-10-15 identified Hemköp
+  Nordstan NYA order **1991586** (chilled `0069155463`, frozen `0069638336`)
+  and New ICA Maxi Alingsås order **1993751** (chilled `0069485001`, frozen
+  `0069562312`). Both have two nShift bookings, but the stored pallet PDF for
+  each has only four cooling pages (one label, three waybill pages) and no
+  frozen pages. The existing dashboard preflight rejects them correctly. This
+  is missing source content, not an incorrect print-status label.
+- `NSHIFT_KYL_REPAIR_EXISTING` is opt-in and order-allow-listed.
+  It inspects the existing pallet PDF against current bookings, fetches each
+  booking separately, verifies both label and waybill pages before any upload,
+  and preserves the existing file on incomplete nShift output. Normal new
+  Kyl pallet sync also performs per-booking verification. DSV paths are
+  unchanged. The numeric order allow-list now reaches the read-only SQL query
+  before its `TOP` candidate limit. Focused regression tests cover repair,
+  refusal, and SQL selection.
+- The owner explicitly approved replacing only these two affected PDFs despite
+  `freight/2/` also being read by old Printward. Commit
+  `b16b00238ed7609f3cab40cfe0dc7d061bb2917a` was pushed to `demo`; the
+  `printward-demo` Cloud Build check succeeded, and the Cloud Run service image
+  was observed at that exact commit. This did **not** update the scheduled
+  `printward-freight-sync` job.
+- A no-call execution `printward-freight-sync-fs9zr` of the existing scheduled
+  job used execution-only overrides (`NSHIFT_FETCH_ENABLED=false` and the two
+  order numbers). It selected two booked Kyl orders from `F0002`, skipped both,
+  uploaded zero. Thus the absence of a definitive booking was not the cause.
+- A separate, unscheduled Cloud Run job `printward-kyl-repair-20261015` used the
+  new demo image, the same SQL/network/secret references as the scheduled job,
+  `F0002`, `freight/2/`, and an allow-list of only `1991586,1993751`. It was
+  deployed with fetching disabled; only execution
+  `printward-kyl-repair-20261015-jfskw` enabled fetching. That execution
+  completed successfully with `total=2`, `uploaded=2`, `failed=0`. GCS then
+  reported new pallet generations `1792055657317417` for 1991586 and
+  `1792055658718575` for 1993751. The authenticated demo order details for
+  1991586 referenced its new generation. The code verifies chilled and frozen
+  label/waybill pages before upload and preserves incomplete existing PDFs.
+- No physical print was sent. The scheduled sync job and `printward-prod` were
+  not updated. A physical stapling/print check remains for staff on site.
