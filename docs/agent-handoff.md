@@ -1667,3 +1667,32 @@ are verification needs, not claims that the running system is broken.
   label/waybill pages before upload and preserves incomplete existing PDFs.
 - No physical print was sent. The scheduled sync job and `printward-prod` were
   not updated. A physical stapling/print check remains for staff on site.
+
+### 2026-10-15 scheduled freight-sync rollout
+
+- After the owner returned to the office and asked for a lasting fix, the
+  existing `printward-freight-sync` Cloud Run job in `visma-274514` /
+  `europe-north1` was updated **only** to image tag
+  `b16b00238ed7609f3cab40cfe0dc7d061bb2917a`. The previous job image
+  was `28d327e25f30207700bef80ed7120606f54da8a2`; among the sync entry
+  points, the source difference is confined to `src/freightSync.js` and the
+  `NSHIFT_KYL_REPAIR_EXISTING` config flag. The scheduled job retains
+  `F0002`, `freight/2/`, the existing service account, nShift fetching, and
+  `NSHIFT_ALLOW_ALL=true`. The broad existing-file repair flag is **not** set;
+  it requires an explicit allow-list and is only for targeted runs.
+- Cloud Scheduler job `printward-freight-sync-every-5m` stayed `ENABLED` with
+  `*/5 * * * *` in `Europe/Stockholm`, still targeting the same Cloud Run job.
+  It was not edited. Web services, local print agents, and physical printers
+  were not changed by this job-image update.
+- Execution-only no-call smoke run `printward-freight-sync-xz42c` used the
+  updated image digest `sha256:f6482418e49a543444184845acc0c71330db308bbcc637803b6587f59d26cf92`,
+  completed successfully, selected only orders 1991586 and 1993751 from SQL,
+  and logged `fetchEnabled=false`, `preview=true`, `total=2`, `skipped=2`,
+  `uploaded=0`, `failed=0`. This did not contact nShift or change GCS. The
+  targeted live repair on the same image is documented above.
+- The first ordinary post-update scheduled execution,
+  `printward-freight-sync-9qx4x` (created 2026-10-15 12:30:16 UTC), used the
+  same `sha256:f6482418e49a543444184845acc0c71330db308bbcc637803b6587f59d26cf92`
+  image digest and reported `Completed=True`. This verifies scheduler-to-job
+  delivery and execution of the new image; it does not by itself prove that a
+  newly booked chilled/frozen shipment was processed end-to-end.
