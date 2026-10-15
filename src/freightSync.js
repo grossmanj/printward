@@ -1,6 +1,6 @@
 import { GcsClient } from './gcsClient.js';
 import { NshiftConsignmentClient } from './nshiftClient.js';
-import { analyzeFreightBookingPdf } from './pdf.js';
+import { analyzeFreightBookingPdf, analyzeKylPalletPdf } from './pdf.js';
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -148,12 +148,16 @@ async function createSqlPool(config) {
   };
 }
 
-export async function fetchBookedFreightShipments(config) {
+export async function fetchBookedFreightShipments(config, overrides = {}) {
   if (!config.orderContext.connectionString && !(config.orderContext.server && config.orderContext.database)) {
     throw new Error('SQL Server settings are required for nShift freight sync.');
   }
+  const allowedOrders = [...normalizeList(config.nshift.allowedOrderNumbers)];
+  if (allowedOrders.some((value) => !/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 2_147_483_647)) {
+    throw new Error('NSHIFT_ALLOWED_ORDER_NUMBERS must contain positive numeric order numbers.');
+  }
 
-  const { sql, pool } = await createSqlPool(config);
+  const { sql, pool } = overrides.sqlConnection || await createSqlPool(config);
   const request = pool.request();
   const statuses = config.nshift.bookedStatuses.length > 0 ? config.nshift.bookedStatuses : [2, 8];
   const { fromDelDt, toDelDt } = dateWindow(config);
@@ -166,6 +170,11 @@ export async function fetchBookedFreightShipments(config) {
   request.input('fromDelDt', sql.Int, fromDelDt);
   request.input('toDelDt', sql.Int, toDelDt);
   request.input('dsvLabelTestOrder', sql.Int, Number(config.nshift.dsvLabelTestOrderNumber || 0));
+
+  allowedOrders.forEach((value, index) => request.input(`allowedOrder${index}`, sql.Int, Number(value)));
+  const allowedOrderSql = allowedOrders.length > 0
+    ? `AND f.OrdNo IN (${allowedOrders.map((_, index) => `@allowedOrder${index}`).join(',')})`
+    : '';
 
   statuses.forEach((status, index) => {
     request.input(`status${index}`, sql.Int, status);
@@ -209,6 +218,7 @@ export async function fetchBookedFreightShipments(config) {
       AND f.FrInfTp3 = @frInfTp3
       AND f.Val1 IN (${statusSql})
       AND f.OrdNo <> 0
+      ${allowedOrderSql}
       AND (@dsvLabelTestOrder = 0 OR f.OrdNo = @dsvLabelTestOrder)
       AND ISNULL(o.TrTp, 0) = 1
       AND ISNULL(o.SupNo, 0) > 0
@@ -282,6 +292,47 @@ async function verifyDsvPdf(body, shipment) {
   }
 }
 
+async function verifyKylPalletPdf(body, shipment) {
+  try {
+    const analysis = await analyzeKylPalletPdf(body, dsvBookingContext(shipment));
+    return analysis.labelPages.length > 0
+      && analysis.unknownLabelPages.length === 0
+      && analysis.unknownFreightPages.length === 0
+      && shipment.consignments.every((item) => {
+        const prefix = item.kind === 'frozen' ? 'frozen' : 'cooling';
+        return analysis[`${prefix}LabelPages`]?.length > 0
+          && analysis[`${prefix}FreightPages`]?.length > 0;
+      });
+  } catch {
+    return false;
+  }
+}
+
+async function fetchKylPalletPdf(nshift, shipment, config) {
+  const parts = [];
+  const printOptions = {
+    printOperation: config.nshift.palletPrintOperation || 'print',
+    printType: config.nshift.palletPrintType || 2,
+    printFormat: config.nshift.palletPrintFormat || config.nshift.printFormat || 'PDF'
+  };
+  for (const consignment of shipment.consignments) {
+    const documents = filterPdfDocuments(await nshift.printDocuments([consignment.consignmentNo], printOptions));
+    if (!documents.length) {
+      throw new Error(`nShift returned no pallet PDF for ${consignment.kind} booking ${consignment.consignmentNo} on order ${shipment.orderNumber}.`);
+    }
+    const part = await mergePdfBuffers(documents.map((document) => document.body));
+    if (!await verifyKylPalletPdf(part, { ...shipment, consignments: [consignment] })) {
+      throw new Error(`nShift pallet PDF lacks a verified label or waybill for ${consignment.kind} booking ${consignment.consignmentNo} on order ${shipment.orderNumber}; existing PDF was preserved.`);
+    }
+    parts.push(part);
+  }
+  const body = await mergePdfBuffers(parts);
+  if (!await verifyKylPalletPdf(body, shipment)) {
+    throw new Error(`nShift pallet PDF lacks verified labels or waybills for order ${shipment.orderNumber}; existing PDF was preserved.`);
+  }
+  return body;
+}
+
 async function fetchDsvLabelPdf(nshift, shipment) {
   const pages = [];
   for (const consignment of shipment.consignments) {
@@ -319,6 +370,15 @@ export async function syncFreightDocuments(config, overrides = {}) {
   const legacyDsvTestConsignment = String(config.nshift.dsvLabelTestConsignmentNumber || '').trim();
   if (legacyDsvTestConsignment) dsvLabelTestConsignments.add(legacyDsvTestConsignment);
   const allowedTestOrders = normalizeList(config.nshift.allowedOrderNumbers);
+  if (config.nshift.repairExistingKyl === true && (
+    config.nshift.allowAll === true ||
+    allowedTestOrders.size === 0 ||
+    normalizeList(config.nshift.allowedConsignmentNumbers).size > 0 ||
+    config.nshift.forceRefresh === true ||
+    config.nshift.palletFetchEnabled === false
+  )) {
+    throw new Error('Kyl pallet repair requires NSHIFT_ALLOW_ALL=false, an explicit order allow-list, no consignment filtering or force refresh, and pallet fetching enabled.');
+  }
   if (dsvLabelTestOrderNumber && (
     config.nshift.allowAll ||
     !config.nshift.forceRefresh ||
@@ -391,6 +451,13 @@ export async function syncFreightDocuments(config, overrides = {}) {
           const existingPdf = await storage.getObject(objectName, 'freight', existingFreight.generation || '');
           if (!await verifyDsvPdf(existingPdf.body, shipment)) existingFreight = null;
         }
+        if (existingPallet && !isDsvShipment(shipment) && config.nshift.repairExistingKyl === true) {
+          if (typeof storage.getObject !== 'function') {
+            throw new Error('Kyl pallet repair requires reading the existing PDF before any nShift call.');
+          }
+          const existingPdf = await storage.getObject(palletObjectName, 'freight', existingPallet.generation || '');
+          if (!await verifyKylPalletPdf(existingPdf.body, shipment)) existingPallet = null;
+        }
         if (existingFreight && (!palletRequired || existingPallet)) {
           results.push({
             ok: true,
@@ -440,13 +507,7 @@ export async function syncFreightDocuments(config, overrides = {}) {
         if (config.nshift.palletFetchEnabled === false) {
           palletUpload = { uploaded: false, skipped: true, disabled: true, name: palletObjectName };
         } else {
-          const palletDocuments = await nshift.printDocuments(consignmentNumbers, {
-            printOperation: config.nshift.palletPrintOperation || 'print',
-            printType: config.nshift.palletPrintType || 2,
-            printFormat: config.nshift.palletPrintFormat || config.nshift.printFormat || 'PDF'
-          });
-          const palletPdfs = filterPdfDocuments(palletDocuments).map((document) => document.body);
-          const palletBody = await mergePdfBuffers(palletPdfs);
+          const palletBody = await fetchKylPalletPdf(nshift, shipment, config);
           palletBytes = palletBody.length;
           palletUpload = config.nshift.dryRun
             ? { uploaded: false, skipped: true, dryRun: true, name: palletObjectName }

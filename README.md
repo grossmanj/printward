@@ -423,14 +423,15 @@ Freight documents are synced by a separate Cloud Run Job. The web app does not c
 The sync job:
 
 - Reads booked consignments from `FreeInf1` where `InfCatNo = 8376`, `FrInfTp = 1213`, `FrInfTp2 = 2386`, `FrInfTp3 = 5325`, and `Val1 IN (2, 8)`.
+- When `NSHIFT_ALLOWED_ORDER_NUMBERS` is set, applies that numeric order allow-list in the read-only SQL query before its candidate limit, so a targeted repair cannot miss an older order merely because the general candidate window is full.
 - Uses `FreeInf1.Txt1` and `FreeInf1.Txt2` as fresh/chilled and frozen consignment numbers.
 - Reads `FreeInf1.Val2`, `Val3`, `Val5`, and `Val6` by default as reported pallet/half-pallet count metadata; these counts do not control PDF page duplication.
 - Calls nShift `ConsignmentWS.printWaybill` for ordinary freight. For DSV
   Finland it fetches a `print` type-1 PDF label and a waybill separately for
   each booking, then verifies both before upload.
 - Merges multiple PDFs into one `freight{OrdNo}.pdf`.
-- For `Kyl- och Frysexpressen Mälardalen AB` orders with booked consignments, calls nShift `ConsignmentWS.print` with the configured pallet print type and uploads one `pallet{OrdNo}.pdf`, including when reported pallet counts are zero.
-- Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight. Opt-in `NSHIFT_DSV_REPAIR_EXISTING=true` instead checks stored DSV PDFs and refetches incomplete ones.
+- For `Kyl- och Frysexpressen Mälardalen AB` orders with booked consignments, calls nShift `ConsignmentWS.print` separately for each chilled/frozen booking with the configured pallet print type. It verifies that each response contains a label and waybill for its booking, then merges and uploads one `pallet{OrdNo}.pdf`, including when reported pallet counts are zero. An incomplete response is not uploaded.
+- Skips existing output PDFs before calling nShift in non-dry mode unless `NSHIFT_FORCE_REFRESH=true`; a missing pallet PDF can be backfilled without refetching existing freight. Opt-in `NSHIFT_DSV_REPAIR_EXISTING=true` checks stored DSV PDFs. Opt-in `NSHIFT_KYL_REPAIR_EXISTING=true` checks stored Kyl pallet PDFs against the current bookings and refetches only incomplete pallets. Kyl repair requires an explicit order allow-list, no consignment filter or force refresh, `NSHIFT_ALLOW_ALL=false`, and pallet fetching enabled.
 - Uploads only when the PDF content hash changed, so GCS generations and Printward reprint state stay stable.
 
 For a **one-order DSV test**, opt in with
@@ -462,6 +463,11 @@ VISIBLE_DOCUMENT_TYPES=pallet,packingSlip,attachment,freight
 distributor with booked consignment numbers, even when reported pallet counts are
 zero. An existing pallet PDF also makes it required. The pallet bundle covers
 freight, so a separate freight PDF is excluded from the print packet. Defaults:
+
+When demo reads `F0002` and `freight/2/`, its freight PDFs are shared with the
+old Printward service. Repairing one of those PDFs is a shared-source change,
+even if only demo code or a one-off repair job is updated. A web-app deploy alone
+does not run freight sync or repair existing files.
 
 ```text
 NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS=Kyl- och Frysexpressen Mälardalen AB

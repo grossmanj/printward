@@ -1,8 +1,53 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mergePdfBuffers, syncFreightDocuments } from '../src/freightSync.js';
-import { analyzeFreightBookingPdf, createPlaceholderPdf } from '../src/pdf.js';
+import { fetchBookedFreightShipments, mergePdfBuffers, syncFreightDocuments } from '../src/freightSync.js';
+import { analyzeFreightBookingPdf, analyzeKylPalletPdf, createPlaceholderPdf } from '../src/pdf.js';
+
+async function kylPacket(booking, kind = 'fresh') {
+  const temperature = kind === 'frozen' ? 'Froozen' : 'Cooling';
+  return mergePdfBuffers([
+    createPlaceholderPdf(`ETIKETT ${booking}`),
+    createPlaceholderPdf(`FRAKTSEDEL ${temperature} ${booking}`)
+  ]);
+}
+
+test('limits the read-only SQL candidate query to allow-listed orders before TOP', async () => {
+  const bindings = new Map();
+  let query = '';
+  let closed = false;
+  const sqlConnection = {
+    sql: { Int: 'int' },
+    pool: {
+      request() {
+        return {
+          input(name, _type, value) { bindings.set(name, value); return this; },
+          async query(value) { query = value; return { recordset: [] }; }
+        };
+      },
+      async close() { closed = true; }
+    }
+  };
+  const config = {
+    orderContext: { connectionString: 'test' },
+    nshift: { bookedStatuses: [2, 8], candidateLimit: 2,
+      allowedOrderNumbers: ['1991586', '1993751'] }
+  };
+  assert.deepEqual(await fetchBookedFreightShipments(config, { sqlConnection }), []);
+  assert.match(query, /SELECT TOP \(@limit\)/);
+  assert.match(query, /AND f\.Val1 IN \(@status0,@status1\)/);
+  assert.match(query, /AND f\.OrdNo IN \(@allowedOrder0,@allowedOrder1\)/);
+  assert.equal(bindings.get('allowedOrder0'), 1991586);
+  assert.equal(bindings.get('allowedOrder1'), 1993751);
+  assert.equal(closed, true);
+});
+
+test('rejects invalid SQL order allow-lists before connecting', async () => {
+  await assert.rejects(fetchBookedFreightShipments({
+    orderContext: { connectionString: 'test' },
+    nshift: { allowedOrderNumbers: ['1991586 OR 1=1'] }
+  }), /positive numeric order numbers/);
+});
 
 test('normal DSV sync writes verified labels and waybills for each booking', async () => {
   const calls = [];
@@ -326,7 +371,9 @@ test('syncs pallet documents for Kyl och Frysexpressen shipments with booked con
         return [{
           name: `${options.printType === 2 ? 'pallet' : 'freight'}.pdf`,
           contentType: 'application/pdf',
-          body: createPlaceholderPdf(options.printType === 2 ? 'Pallet' : 'Freight')
+          body: options.printType === 2
+            ? await kylPacket('FRESH1')
+            : createPlaceholderPdf('Freight')
         }];
       }
     }
@@ -387,7 +434,7 @@ test('backfills missing pallet PDFs without refetching existing freight PDFs', a
         return [{
           name: 'pallet.pdf',
           contentType: 'application/pdf',
-          body: createPlaceholderPdf('Pallet')
+          body: await kylPacket('FRESH1')
         }];
       }
     }
@@ -399,4 +446,101 @@ test('backfills missing pallet PDFs without refetching existing freight PDFs', a
   assert.equal(result.failed, 0);
   assert.equal(result.results[0].freightSkipped, true);
   assert.equal(result.results[0].palletUploaded, true);
+});
+
+test('repairs only an incomplete Kyl pallet PDF with separate verified chilled and frozen bookings', async () => {
+  const chilled = 'CHILLED-1';
+  const frozen = 'FROZEN-1';
+  const oldBody = await kylPacket(chilled);
+  const calls = [];
+  const uploaded = [];
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', outputPrefix: 'freight/2/', dryRun: false,
+    allowAll: false, allowedOrderNumbers: ['1991586'], repairExistingKyl: true,
+    syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '1991586', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: chilled }, { kind: 'frozen', consignmentNo: frozen }] }],
+    storage: {
+      async getObjectMetadata(name) { return { generation: name.includes('pallet') ? 'old-pallet' : 'old-freight' }; },
+      async getObject(name, _source, generation) {
+        assert.equal(name, 'freight/2/pallet1991586.pdf');
+        assert.equal(generation, 'old-pallet');
+        return { body: oldBody };
+      },
+      async uploadObjectIfChanged(name, body) { uploaded.push({ name, body }); return { uploaded: true }; }
+    },
+    nshiftClient: { async printDocuments(numbers, options) {
+      calls.push({ numbers, options });
+      return [{ name: 'pallet.pdf', contentType: 'application/pdf',
+        body: await kylPacket(numbers[0], numbers[0] === frozen ? 'frozen' : 'fresh') }];
+    } }
+  });
+  assert.equal(result.failed, 0);
+  assert.deepEqual(calls.map(({ numbers }) => numbers), [[chilled], [frozen]]);
+  assert.deepEqual(uploaded.map(({ name }) => name), ['freight/2/pallet1991586.pdf']);
+  const analysis = await analyzeKylPalletPdf(uploaded[0].body, {
+    freightConsignmentFresh: chilled, freightConsignmentFrozen: frozen
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [3]);
+  assert.deepEqual(analysis.coolingFreightPages, [2]);
+  assert.deepEqual(analysis.frozenFreightPages, [4]);
+});
+
+test('preserves existing Kyl pallet PDF when nShift omits frozen pages', async () => {
+  const oldBody = await kylPacket('CHILLED-1');
+  let uploads = 0;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', dryRun: false, allowAll: false,
+    allowedOrderNumbers: ['1991586'], repairExistingKyl: true,
+    syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '1991586', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'old' }; },
+      async getObject() { return { body: oldBody }; },
+      async uploadObjectIfChanged() { uploads += 1; return { uploaded: true }; }
+    },
+    nshiftClient: { async printDocuments() {
+      return [{ name: 'pallet.pdf', contentType: 'application/pdf', body: oldBody }];
+    } }
+  });
+  assert.equal(result.failed, 1);
+  assert.equal(uploads, 0);
+  assert.match(result.results[0].error, /lacks a verified label or waybill/);
+});
+
+test('Kyl repair leaves a complete existing pallet PDF untouched', async () => {
+  const completeBody = await mergePdfBuffers([
+    await kylPacket('CHILLED-1'), await kylPacket('FROZEN-1', 'frozen')
+  ]);
+  let calls = 0;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', dryRun: false, allowAll: false,
+    allowedOrderNumbers: ['1991586'], repairExistingKyl: true,
+    syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '1991586', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'complete' }; },
+      async getObject() { return { body: completeBody }; }
+    },
+    nshiftClient: { async printDocuments() { calls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(calls, 0);
+});
+
+test('Kyl repair refuses broad runs before nShift calls', async () => {
+  let calls = 0;
+  await assert.rejects(syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, repairExistingKyl: true
+  } }, {
+    shipments: [{ orderNumber: '1991586', consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }] }],
+    nshiftClient: { async printDocuments() { calls += 1; return []; } }
+  }), /requires NSHIFT_ALLOW_ALL=false, an explicit order allow-list/);
+  assert.equal(calls, 0);
 });

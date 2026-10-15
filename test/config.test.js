@@ -44,6 +44,8 @@ test('nShift freight sync defaults to a separate freight prefix', () => {
   assert.equal(config.nshift.palletPrintType, 2);
   assert.equal(config.nshift.repairExistingDsv, false);
   assert.equal(loadConfig({ NSHIFT_DSV_REPAIR_EXISTING: 'true' }).nshift.repairExistingDsv, true);
+  assert.equal(config.nshift.repairExistingKyl, false);
+  assert.equal(loadConfig({ NSHIFT_KYL_REPAIR_EXISTING: 'true' }).nshift.repairExistingKyl, true);
   assert.deepEqual(config.nshift.palletCopyFields, ['Val2', 'Val3', 'Val5', 'Val6']);
   assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen Mälardalen AB']);
 });
