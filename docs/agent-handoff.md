@@ -1906,9 +1906,9 @@ are verification needs, not claims that the running system is broken.
   `2/order2000949.pdf` shows Eriksson. The cause of the upstream wrong-content
   upload is not yet established.
 - Printward currently trusts the storage object name as document identity;
-  snapshot creation does not inspect PDF contents. A local, undeployed guard
-  now checks the `Ordernr` header on every page of a job-authorized own-car
-  Visma slip before stamping its registration. It rejected the actual bad
+  snapshot creation does not inspect PDF contents. A guard added during this
+  investigation checks the `Ordernr` header on every page of a job-authorized
+  own-car Visma slip before stamping its registration. It rejected the actual bad
   `order2001521.pdf` with "contains order 2000949, but the print job expects
   2001521"; synthetic regression coverage also passes. This guard does not
   repair already printed jobs or validate unstamped external slips.
@@ -1920,9 +1920,34 @@ are verification needs, not claims that the running system is broken.
   title, author, and creator, and the guard now accepts that export title only
   with the same verified form geometry, transport field, and matching order
   number. The candidate passed the actual stamping check and rejected a wrong
-  expected order number. It has not been uploaded. Reprinting must use a new
-  single-order job after replacement; do not retry the 63-order batch. No agent
-  update or deployment was initiated during this investigation.
+  expected order number. At this stage it had not been uploaded. Reprinting
+  must use a new single-order job after replacement; do not retry the 63-order
+  batch. No agent update or deployment was initiated during this investigation.
 - `npm test` could not run because npm is unavailable on this host. The bundled
   Node 24 runtime ran `node --test` successfully (158 passed, 0 failed) after
   adding the verified warehouse export form and route-17 precedence case.
+
+### 2026-11-09 demo release and order 2001521 PDF repair (verified)
+
+- After fetching `origin/demo`, the branch was two commits ahead and had no
+  remote-only commits. Commit `0adc4a2499933494f9dab921d5ebe52f72421093`
+  was pushed normally to `demo`; `git ls-remote` confirmed the exact SHA. No
+  pull request was created.
+- Automatic Cloud Build `1cb42a6b-7d83-4cc9-8a07-acf508d07ce3` succeeded for
+  that SHA. Cloud Run `printward-demo` revision `printward-demo-00047-zrb` in
+  `europe-north1` serves its image with 100% traffic. The live authenticated
+  dashboard showed the Lördag card beside Returer. Production and Windows
+  agents were not updated.
+- Before replacing the single approved shared GCS object
+  `gs://pdf-service-bucket/2/order2001521.pdf`, its live generation was still
+  `1794204028126701`. `gcloud storage cp --if-generation-match=1794204028126701`
+  uploaded the verified **one-page** Restore Greens slip. The new generation is
+  `1794233567698290`, size 89,468 bytes; its GCS MD5 matches the local file.
+  `2/parti2001521.pdf` was left intact. No nShift call or physical print was
+  made. Old Printward also reads the shared GCS source.
+- After the replacement, the live demo's order `2001521` displayed
+  `Uppdaterad`. The historical 63-order job remains recorded as printed; a
+  real paper check must use a new **single-order** job, not replay the whole
+  batch. The upstream reason a Malmö slip was stored under Restore Greens's
+  object name remains unknown. The new order-number guard covers own-car Visma
+  slips during job preparation; it does not validate unstamped freight slips.
