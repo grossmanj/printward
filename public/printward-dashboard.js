@@ -819,7 +819,7 @@ async function loadFreightDashboard(refresh = false, background = false) {
   }
 }
 
-const dispatchNames = { early: 'Tidig', morning: 'Förmiddag', afternoon: 'Eftermiddag' };
+const dispatchNames = { early: 'Tidig', morning: 'Förmiddag', afternoon: 'Eftermiddag', saturday: 'Lördag' };
 
 function renderDispatchCards(payload) {
   const available = payload.contextStatus?.available !== false;
@@ -842,7 +842,7 @@ function renderDispatchCards(payload) {
   const notes = [];
   if (!available) notes.push('Orderkälla saknas – egna bilars avgångar kan inte visas.');
   else {
-    if (payload.unassignedCount) notes.push(`${payload.unassignedCount} egna bil-order utanför Tidig/FM/EM (t.ex. 08, 11 eller 12) finns i Alla order.`);
+    if (payload.unassignedCount) notes.push(`${payload.unassignedCount} egna bil-order utanför Tidig/FM/EM/Lördag (t.ex. 11 eller 12) finns i Alla order.`);
     if (payload.registrationTextMatches) notes.push(`${payload.registrationTextMatches} order matchades preliminärt via registreringsnumrets text.`);
   }
   caution.textContent = notes.join(' ');

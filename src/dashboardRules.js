@@ -15,6 +15,7 @@ export function freightPanelForOrder(order = {}) {
   const deliveryMethod = Number(context.deliveryMethod || 0);
   const distributorNo = Number(context.distributorNo || 0);
 
+  if (deliveryMethod === 17) return null;
   // Eriksson uses Kyl & Frys' supplier; only the order's DelMt separates it.
   if (ROUTES.eriksson.has(deliveryMethod) && distributorNo === SUPPLIERS.kylAndFrys) return 'eriksson';
   if (ROUTES.dsvFinland.has(deliveryMethod) || distributorNo === SUPPLIERS.dsvFinland) return 'dsv-finland';
@@ -34,7 +35,7 @@ const FREIGHT_PANEL_IDS = [
 ];
 
 const TRACKED_DOCUMENT_PANELS = new Set(['kyl-and-frys', 'dsv-finland', 'eriksson']);
-const OWN_DELIVERY_METHODS = new Set([1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 27, 41]);
+const OWN_DELIVERY_METHODS = new Set([1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 27, 41]);
 const REGISTRATION_TEXT = /^(?:\d+\s*[.:-]?\s*)?\[?([A-ZÅÄÖ]{3}\s+[A-Z0-9]{3})\]?$/i;
 
 function freightDocumentType(order, panelId) {
@@ -246,9 +247,10 @@ export function summarizePickups(contexts = []) {
 }
 
 export function ownVehicleSourceForContext(context = {}) {
+  const method = Number(context.deliveryMethod);
+  if (method === 17) return 'confirmed-method';
   // External suppliers take precedence even if a route happens to reuse a code.
   if (Number(context.distributorNo || 0) > 0) return null;
-  const method = Number(context.deliveryMethod);
   if (OWN_DELIVERY_METHODS.has(method)) return 'confirmed-method';
   const name = String(context.deliveryMethodName || '').trim();
   return REGISTRATION_TEXT.test(name) ? 'registration-text' : null;
@@ -261,6 +263,7 @@ export function registrationForOwnVehicleContext(context = {}) {
 }
 
 export function dispatchSlotForContext(context = {}) {
+  if (Number(context.deliveryMethod) === 17) return 'saturday';
   const hour = Number(context.dispatchPriority);
   if (!Number.isInteger(hour) || hour <= 0) return null;
   if (hour <= 8) return 'early';
@@ -270,7 +273,7 @@ export function dispatchSlotForContext(context = {}) {
 }
 
 export function summarizeOwnDispatch(orders = []) {
-  const slots = Object.fromEntries(['early', 'morning', 'afternoon'].map((id) => [id, {
+  const slots = Object.fromEntries(['early', 'morning', 'afternoon', 'saturday'].map((id) => [id, {
     id, total: 0, ready: 0, printed: 0, waiting: 0, orders: []
   }]));
   const unassigned = [];

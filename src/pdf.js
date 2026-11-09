@@ -209,15 +209,19 @@ export async function extractPdfPages(body, selection) {
 // Verify the origin and transport-field layout, not that incidental number.
 // The source object is never changed: only a job-authorized download receives
 // the registration captured from the current order context.
-export async function stampVismaPackingSlipRegistration(body, registration) {
+export async function stampVismaPackingSlipRegistration(body, registration, expectedOrderNumber) {
   const normalized = String(registration || '').trim().toUpperCase().replace(/\s+/g, ' ');
   if (!/^[A-Z]{3} [A-Z0-9]{3}$/.test(normalized)) {
     throw new Error('A verified vehicle registration is required for the packing slip.');
   }
+  const expected = String(expectedOrderNumber || '').trim();
+  if (!/^\d{1,10}$/.test(expected)) {
+    throw new Error('A verified order number is required for the packing slip.');
+  }
 
   const pdfLib = await import('pdf-lib');
   const pdf = await pdfLib.PDFDocument.load(Buffer.isBuffer(body) ? body : Buffer.from(body));
-  if (!/Följesedel NettoNetto\(\d{1,6}\)\.pdf$/i.test(pdf.getTitle() || '')
+  if (!/(?:Följesedel NettoNetto\(\d{1,6}\)|Orderhantering Lager)\.pdf$/i.test(pdf.getTitle() || '')
       || pdf.getAuthor() !== 'Visma'
       || pdf.getCreator() !== 'Visma Business') {
     throw new Error('The packing slip is not a verified Visma form.');
@@ -235,6 +239,16 @@ export async function stampVismaPackingSlipRegistration(body, registration) {
     const contents = extractPdfPageText(pdf, index, pdfLib);
     const draws = [...contents.matchAll(/(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Tm[\s\S]{0,120}?\[\(([^()]*)\)\]\s+TJ/g)]
       .map((match) => ({ x: Number(match[1]), y: Number(match[2]), text: match[3] }));
+    const orderLabel = draws.find(({ x, y, text }) =>
+      text === 'Ordernr' && Math.abs(x - 472.422) < 1 && Math.abs(y - 44.58) < 1);
+    const orderValue = draws.find(({ x, y, text }) =>
+      /^\d{1,10}$/.test(text) && Math.abs(x - 472.422) < 1 && Math.abs(y - 58.8934) < 1);
+    if (!orderLabel || !orderValue) {
+      throw new Error(`The Visma packing slip order number could not be verified for order ${expected}.`);
+    }
+    if (orderValue.text !== expected) {
+      throw new Error(`The Visma packing slip contains order ${orderValue.text}, but the print job expects ${expected}.`);
+    }
     const label = draws.find(({ x, y, text }) =>
       text === 'Transportsätt' && Math.abs(x - 316.5165) < 1 && Math.abs(y - 277.021) < 1);
     const value = draws.find(({ x, y, text }) =>

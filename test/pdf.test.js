@@ -14,14 +14,26 @@ import {
   stampVismaPackingSlipRegistration
 } from '../src/pdf.js';
 
-async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pdf', field = true, author = 'Visma', creator = 'Visma Business' } = {}) {
+async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pdf', field = true, orderNumber = '2001521', author = 'Visma', creator = 'Visma Business' } = {}) {
   const pdf = await PDFDocument.create();
   pdf.setTitle(title);
   pdf.setAuthor(author);
   pdf.setCreator(creator);
   const page = pdf.addPage([593.794276, 840.440741]);
+  const content = [
+      'BT',
+      '1 0 0 -1 472.422 44.58 Tm',
+      '/Times-Roman 10 Tf',
+      '[(Ordernr)] TJ',
+      'ET',
+      'BT',
+      '1 0 0 -1 472.422 58.8934 Tm',
+      '/Times-Roman 10 Tf',
+      `[(${orderNumber})] TJ`,
+      'ET'
+  ];
   if (field) {
-    const content = [
+    content.push(
       'BT',
       '1 0 0 -1 316.5165 277.021 Tm',
       '/Times-Roman 10 Tf',
@@ -32,37 +44,51 @@ async function createVismaSlipFixture({ title = 'Följesedel NettoNetto(2050).pd
       '/Times-Roman 10 Tf',
       '[(SYD)] TJ',
       'ET'
-    ].join('\n');
-    const stream = pdf.context.flateStream(Buffer.from(content, 'latin1'));
-    page.node.addContentStream(pdf.context.register(stream));
+    );
   }
+  const stream = pdf.context.flateStream(Buffer.from(content.join('\n'), 'latin1'));
+  page.node.addContentStream(pdf.context.register(stream));
   return Buffer.from(await pdf.save());
 }
 
 test('replaces only the verified Visma slip transport field on the print copy', async () => {
   const source = await createVismaSlipFixture();
-  const stamped = await stampVismaPackingSlipRegistration(source, 'UEJ 64A');
+  const stamped = await stampVismaPackingSlipRegistration(source, 'UEJ 64A', '2001521');
   const pdf = await PDFDocument.load(stamped);
   assert.equal(pdf.getPageCount(), 1);
   assert.equal(pdf.getTitle(), 'Följesedel NettoNetto(2050).pdf');
   assert.notDeepEqual(stamped, source);
 
   const alternate = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2101).pdf' });
-  assert.ok((await stampVismaPackingSlipRegistration(alternate, 'UEJ 64A')).length > 0);
+  assert.ok((await stampVismaPackingSlipRegistration(alternate, 'UEJ 64A', '2001521')).length > 0);
   const latest = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2514).pdf' });
-  assert.ok((await stampVismaPackingSlipRegistration(latest, 'PST 18A')).length > 0);
+  assert.ok((await stampVismaPackingSlipRegistration(latest, 'PST 18A', '2001521')).length > 0);
   const anotherExport = await createVismaSlipFixture({ title: 'C:\\Windows\\TEMP\\9038A.   Följesedel NettoNetto(2551).pdf' });
-  assert.ok((await stampVismaPackingSlipRegistration(anotherExport, 'PST 18A')).length > 0);
+  assert.ok((await stampVismaPackingSlipRegistration(anotherExport, 'PST 18A', '2001521')).length > 0);
+  const warehouseExport = await createVismaSlipFixture({ title: 'C:\\Users\\Temp\\Orderhantering Lager.pdf' });
+  assert.ok((await stampVismaPackingSlipRegistration(warehouseExport, 'ZBU 16U', '2001521')).length > 0);
 });
 
 test('rejects unverified Visma layouts and invalid registration text', async () => {
   const wrongForm = await createVismaSlipFixture({ title: 'Another form.pdf' });
   const wrongOrigin = await createVismaSlipFixture({ title: 'Följesedel NettoNetto(2551).pdf', author: 'Other software' });
   const missingField = await createVismaSlipFixture({ field: false });
-  await assert.rejects(stampVismaPackingSlipRegistration(wrongForm, 'UEJ 64A'), /not a verified Visma form/);
-  await assert.rejects(stampVismaPackingSlipRegistration(wrongOrigin, 'UEJ 64A'), /not a verified Visma form/);
-  await assert.rejects(stampVismaPackingSlipRegistration(missingField, 'UEJ 64A'), /transport field could not be verified/);
-  await assert.rejects(stampVismaPackingSlipRegistration(await createVismaSlipFixture(), 'SYD'), /verified vehicle registration/);
+  await assert.rejects(stampVismaPackingSlipRegistration(wrongForm, 'UEJ 64A', '2001521'), /not a verified Visma form/);
+  await assert.rejects(stampVismaPackingSlipRegistration(wrongOrigin, 'UEJ 64A', '2001521'), /not a verified Visma form/);
+  await assert.rejects(stampVismaPackingSlipRegistration(missingField, 'UEJ 64A', '2001521'), /transport field could not be verified/);
+  await assert.rejects(stampVismaPackingSlipRegistration(await createVismaSlipFixture(), 'SYD', '2001521'), /verified vehicle registration/);
+});
+
+test('refuses to stamp a Visma slip filed under another order number', async () => {
+  const misplaced = await createVismaSlipFixture({ orderNumber: '2000949' });
+  await assert.rejects(
+    stampVismaPackingSlipRegistration(misplaced, 'ZBU 16U', '2001521'),
+    /contains order 2000949, but the print job expects 2001521/
+  );
+  await assert.rejects(
+    stampVismaPackingSlipRegistration(misplaced, 'ZBU 16U', ''),
+    /verified order number is required/
+  );
 });
 
 async function createMarkerPdf(pages) {

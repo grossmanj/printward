@@ -8,7 +8,7 @@ const agent = readFileSync(new URL('../src/local-agent.js', import.meta.url), 'u
 
 test('overview quick-print controls start disabled and require server print capability', () => {
   const buttons = [...html.matchAll(/<button class="quick-print"[^>]*>/g)].map(([tag]) => tag);
-  assert.equal(buttons.length, 12);
+  assert.equal(buttons.length, 13);
   for (const button of buttons) assert.match(button, /\bdisabled\b/);
   assert.equal((html.match(/>Visa avgångar<\/span>/g) || []).length, 5);
   assert.match(script, /realPrintingEnabled = payload\.dashboardPrintingEnabled === true/);
@@ -111,12 +111,14 @@ test('all tracked freight cards use a compact count and keep print status visibl
 
 test('own-car cards show Edmarks departure times and clarify ready versus total', () => {
   assert.match(html, /Alla order för valt leveransdatum, även de som inte ingår i en utskriftsgrupp/);
-  assert.equal((html.match(/redo för utskrift av/g) || []).length, 3);
+  assert.equal((html.match(/redo för utskrift av/g) || []).length, 4);
   assert.match(html, /<time>Senast 08:00<\/time>/);
   assert.match(html, /<time>09:00–10:00<\/time>/);
   assert.match(html, /<time>Från 13:00<\/time>/);
-  assert.equal((html.match(/class="dispatch-printed"/g) || []).length, 3);
-  assert.equal((html.match(/class="dispatch-not-ready"/g) || []).length, 3);
+  assert.equal((html.match(/class="dispatch-printed"/g) || []).length, 4);
+  assert.equal((html.match(/class="dispatch-not-ready"/g) || []).length, 4);
+  assert.match(html, /class="returns-saturday"[\s\S]*?data-dispatch-slot="saturday"[\s\S]*?class="panel returns"/);
+  assert.match(script, /saturday: 'Lördag'/);
   assert.match(script, /Registrerat utskrivna betyder bekräftade av skrivarkön/);
 });
 

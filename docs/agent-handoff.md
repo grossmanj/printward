@@ -1,9 +1,10 @@
 # Agent handoff
 
-Last reviewed: 2026-09-07. Behavior reviewed through commit `4d8d9c6`
-(`Allow early external freight printing`). This handoff update changes documentation
-only. GitHub repository: [grossmanj/printward](https://github.com/grossmanj/printward),
-branch `main`. Check Git history for subsequent work.
+Last reviewed: 2026-11-09. The historical baseline was commit `4d8d9c6`
+(`Allow early external freight printing`). Later behavior, staged work, and
+live deployment evidence are recorded in the dated sections below. GitHub
+repository: [grossmanj/printward](https://github.com/grossmanj/printward).
+Check the current branch and Git history before making operational changes.
 
 ## Architecture and entry points
 
@@ -1696,3 +1697,232 @@ are verification needs, not claims that the running system is broken.
   image digest and reported `Completed=True`. This verifies scheduler-to-job
   delivery and execution of the new image; it does not by itself prove that a
   newly booked chilled/frozen shipment was processed end-to-end.
+
+### 2026-10-19 manual repair of two incomplete Kyl pallet PDFs
+
+- At the owner's explicit request and with approval limited to two objects,
+  repaired `freight/2/pallet1993941.pdf` and
+  `freight/2/pallet1994591.pdf` in `pdf-service-bucket`. These objects are a
+  shared PDF source for demo and old Printward; no application deployment was
+  made. No SQL write, new nShift booking, or physical print was performed.
+- Both originals were four-page chilled-only PDFs despite existing chilled
+  and frozen booking numbers. The owner approved opening the existing frozen
+  bookings' documents in nShift; that action may register a document print
+  within nShift. Their frozen label and three-page waybill were merged with
+  each respective original. Local dynamic page analysis verified eight pages
+  per result: chilled label and freight (pages 1–4), then frozen label and
+  freight (pages 5–8). Representative pages were rendered and visually checked.
+- Before upload, Cloud Storage showed the original modification times and
+  sizes (about 77 KB each). After an explicit overwrite of exactly the two
+  objects, Cloud Storage confirmed two successful uploads, now about 153 KB
+  each. Printward-demo order details referenced new generations
+  `1792411224397103` (1993941) and `1792411225064028` (1994591). The latter
+  preview opened as an eight-page PDF. No physical print or stapling check was
+  performed; staff must confirm those separately if needed.
+- This was a targeted source-data repair, **not** a permanent fix to the
+  booking/sync race. Ordinary sync can leave an existing chilled-only object
+  untouched; broad existing-PDF repair is not enabled. The C#/SQL booking-state
+  proposal is local in the separate nShiftIntegration repository and requires
+  Jesper's review and a separately authorized release. No PR was created.
+
+### 2026-10-26 Kontor W10 print-agent update
+
+- At the owner's request, updated the existing per-user Printward Agent on
+  `KONTOR-W10` from the `demo` branch using `install-print-agent.ps1
+  -SourceBranch demo`. The installer was downloaded from the repository's
+  `demo` branch and its SHA-256 matched the tracked script
+  (`45ad111ad61abf7e6da3499e032e666399fd651b1b0709f7c941105898690476`).
+- Before the update, `Get-PrintJob printwarddirekt` returned no jobs. The
+  previous app was copied to
+  `%LOCALAPPDATA%\PrintwardAgent\app-backup-20261026` and its
+  `src\local-agent.js` was verified present. The installer completed `npm ci`,
+  installed the PDF bridge, registered startup, and reported the agent running.
+- The installed `src\local-agent.js` SHA-256 is
+  `64107015a69f196310a5b1b76fcaf444e8c0f1e9c845ebd250b557ebfb34c2bb`;
+  `src\printProgressQueue.js` is
+  `d1062aae138dd8dbafb590a1c5b3f327b040ecd1b774d728daba841547fa0da7`.
+  Both match commit `6dd8744`'s speed/progress code. Local `/health` on W10
+  returned `ok`, `canPrint`, `spoolConfirmation`, and `progressReporting` all
+  `true`, with `SumatraPDF.exe` as the bridge.
+- This changed only the W10 agent installation. No SQL, nShift, Cloud Run,
+  scheduler, other workstation, or physical print was touched. A real multi-
+  order print/stapling test is still needed to measure the speed improvement.
+
+### 2026-10-26 Jonas workstation demo-agent installation
+
+- With the owner's action-time approval, installed the per-user agent on
+  `JONAS` (`JonasEdmark`) from `demo`. The downloaded installer SHA-256 was
+  `45ad111ad61abf7e6da3499e032e666399fd651b1b0709f7c941105898690476`;
+  the installed `src/local-agent.js` SHA-256 was
+  `64107015a69f196310a5b1b76fcaf444e8c0f1e9c845ebd250b557ebfb34c2bb`,
+  matching the W10 agent. Node.js 20, npm production dependencies, portable
+  SumatraPDF and the per-user Startup launcher installed successfully.
+- Local `/health` returned `ok`, `canPrint`, `spoolConfirmation` and
+  `progressReporting` true. These are agent capabilities, not proof that a
+  printer job can be confirmed or stapled. Printward-demo opened and logged in
+  in Jonas's Chrome; its **Testa agent** check found the local agent.
+- Jonas's Chrome retained operator `Edmark`, agent URL
+  `http://127.0.0.1:37951`, and queue `kf-direkt`. That queue does **not**
+  exist on this PC; Printward reports it missing. Only physical queue
+  `KF_Produktionen` exists, set as Windows default on a WSD port with
+  `PCL6 V4 Driver for Universal Print`. No Ricoh finishing-specific driver or
+  TCP/IP printer port was found. The queue was not changed or replaced; no
+  print job was sent. W10's `printwarddirekt` configuration must be compared
+  before adding a separate queue for this PC.
+- `Microsoft-Windows-PrintService/Operational` was disabled. An attempt to
+  enable only that log with `wevtutil sl ... /e:true` was denied because the
+  current PowerShell was not elevated; subsequent read still returned
+  `IsEnabled=False`. Administrator action is required before trustworthy
+  Event 307 spool confirmation. Do not use this PC for physical demo printing
+  until the correct queue, finishing, and log are verified.
+- Later on 2026-10-26, with the owner's instruction to match W10, installed
+  the official `RICOH MP C4504ex PCL 6` driver and added a separate
+  `printwarddirekt` queue on Jonas's PC. Verified the queue uses
+  `IP_10.3.3.213`, RAW port 9100, `winprint`, and datatype RAW. The existing
+  `KF_Produktionen` queue remained the Windows default; W10 was not touched.
+  An administrator session enabled `Microsoft-Windows-PrintService/Operational`
+  and a subsequent read reported `enabled: true`.
+- In Jonas's Chrome, Printward-demo retained operator `Edmark`, local agent
+  URL `http://127.0.0.1:37951`, one copy, duplex, and staple-per-order, while
+  the browser queue was changed from nonexistent `kf-direkt` to
+  `printwarddirekt`. **Testa agent** reported the agent ready and five printer
+  queues found. The Ricoh queue's printing preferences were set to A4,
+  long-edge duplex, one copy, and upper-left stapling, and saved with OK.
+- A single physical demo print was initiated from Jonas's PC for today's
+  order `1995374` (Room Sushi / Vasastan), not a full route. Printward's
+  progress changed from 0/1 to **Skickat till skrivarkön: 1 order, 1 bunt**;
+  Tidig changed from 10 to 11 registered printed and 96 to 95 ready. This
+  confirms the application/agent's queue acknowledgement. The user then
+  confirmed physical output: a duplex sheet with the party information on
+  its reverse. Because this was only one sheet, staple placement on a
+  multi-sheet bundle remains unverified. No second test was sent.
+- Later the owner requested simplex output **only within Printward**, not a
+  general Windows/Ricoh printer change. In Jonas's Chrome Printward-demo
+  settings, unchecked `Dubbelsidigt` and saved; `Häfta per order` remained
+  enabled. The Ricoh queue's general duplex preference was not modified.
+  Sent one new demo test order, `1995381` (Itamae Mörby C), through Jonas's
+  Printward session. The UI reported one order/one bundle sent to the printer
+  queue and Tidig changed from 11 to 12 registered printed (95 to 94 ready).
+  The user physically confirmed that the delivery note and party information
+  came out as two separate one-sided sheets and reported that the test worked.
+  Stapling of a multi-sheet bundle was not separately confirmed.
+
+### 2026-11-02 Kontor W10 replacement Ricoh printer
+
+- At the owner's request, configured a separate Windows queue on Kontor W10
+  for the new Ricoh IM C5510 at `10.3.3.71`. The official PCL6 driver uses
+  RAW port 9100 and detected finisher `SR3340` with stapling available.
+  Renamed the queue to the owner's exact PaperCut name `KF-Lager-IMC5510`.
+  The old `printwarddirekt` queue was left in place.
+- The new queue's Ricoh preferences were saved as black and white, simplex,
+  one copy, and upper-left staple. In W10's Printward-demo Chrome session,
+  selected `KF-Lager-IMC5510`, operator `operator`, local agent URL
+  `http://127.0.0.1:37951`, one copy, duplex off, and staple per order on.
+  The agent health check succeeded; its printer-list query timed out once,
+  although Windows showed the queue and the subsequent physical print worked.
+- After the owner reconnected the printer cable and authorized a test, sent
+  only order `1999892` (Miyo House Japanese restaurant, 2026-11-02) from
+  Printward-demo. The UI reported `1 order, 1 bunt` sent to the print queue,
+  then showed the order as `Utskriven` after refresh. The owner physically
+  confirmed two separate one-sided sheets stapled together at upper left.
+  This validates the single-order path, not a multi-order run. Jonas's PC has
+  not been changed for the new printer in this operation.
+
+### 2026-11-02 Jonas workstation replacement Ricoh
+
+- At the owner's request to match Kontor W10, downloaded Ricoh's official
+  Windows 11 PCL6 v1.7.0.0 installer (`20718L23.exe`) on Jonas's PC. The owner
+  approved the driver license at action time. The installer detected the
+  IM C5510 at `10.3.3.71` and added a non-shared `NRG IM C5510 PCL 6` queue
+  on port `IP_10.3.3.71`. `Get-Printer` confirmed that queue and the older
+  `printwarddirekt`, `RICOH MP C4504ex PCL 6`, and `KF_Produktionen` queues
+  remained present.
+- Renamed the separate queue to `KF-Lager-IMC5510`; `Get-Printer` showed it on
+  `IP_10.3.3.71`. The Ricoh accessories tab auto-detected and checked finisher
+  `SR3340`. Its printing preferences were saved as A4, black and white,
+  simplex, one copy, and upper-left stapling. The Windows default and older
+  queues were not changed.
+- In Jonas's existing Chrome profile, Printward-demo retained operator
+  `Edmark`, local agent URL `http://127.0.0.1:37951`, one copy, duplex off,
+  and staple per order on. Changed only the browser queue from
+  `printwarddirekt` to `KF-Lager-IMC5510`; **Testa agent** reported ready and
+  seven printer queues, and the settings save toast confirmed persistence.
+- The first attempted test, order `1999960` in the Tidig/Södermalm view, was
+  rejected before spool submission because the order no longer belonged to
+  that print group and date. A dashboard refresh removed that route/order
+  from the view. No paper was sent for it.
+- A second single-order test, `1999375` (Chop Chop/Nyköping, 2026-11-02),
+  used both ready PDFs. Printward reported `1 order, 1 bunt` sent to the queue;
+  the route count changed from 15/15 ready to 14/15 ready, and the order row
+  showed `Utskriven`. The owner then physically confirmed two separate
+  one-sided sheets stapled at upper left. This validates the single-order
+  path on Jonas's replacement printer; a multi-order run was not tested.
+
+### 2026-11-09 Lördag dispatch card (local only)
+
+- Added a separate Lördag follow-slip group for order `DelMt=17`, independent
+  of `DelPri`. Its orders are excluded from the Tidig/FM/EM quick groups and
+  use the same two-document readiness, current-generation print status, and
+  server-side print authorization as those groups. `DelMt=17` takes precedence
+  even if a stale external distributor number is also present; it is excluded
+  from freight quick groups.
+- The lower dashboard row now divides its former Returer column evenly:
+  Lördag on the left, Returer on the right. The existing return rules and
+  read-only return printing state are unchanged.
+- The lower row's Lördag, Returer, and required-slip cards now stretch their
+  card bodies to align the blue detail buttons and gray quick-print buttons
+  along shared horizontal rows. The pickup list retains per-order actions.
+- At this local verification stage, the change had not been pushed or deployed,
+  and no live SQL, nShift, or physical printer action was run for it. Later
+  deployment evidence is recorded separately below.
+- The bundled Node 24 runtime passed all 158 tests with `node --test`, including
+  the new route-17 selection regression and updated dashboard markup checks;
+  `git diff --check` passed. A local read-only mock server on port 3111 was
+  visually checked in the in-app browser at desktop width: Lördag appears
+  immediately left of Returer, and both occupy equal halves of the former
+  Returer column. No live order data or physical print was used.
+
+### 2026-11-09 wrong packing slip stored under another order
+
+- The operator reported Restore Greens order `2001521` as missing while
+  Printward-demo showed `Utskriven`, and photographed a Tin Tin Sushi-Boba /
+  Malmö slip for order `2000949` with vehicle registration `ZBU 16U` in the
+  ordinary-car bundle. Read-only inspection of live demo job
+  `fe2b3073-08cd-49dd-83b9-0d940dc37c02` found `2001521` as section 35 of
+  63 in the morning dispatch batch to `KF-Lager-IMC5510`, started at 08:15
+  and marked complete at 08:21 Stockholm time. Its snapshot captured
+  registration `ZBU 16U` and linked `2/order2001521.pdf` generation
+  `1794204028126701` plus `2/parti2001521.pdf` generation
+  `1794204028445789`.
+- Opening those exact PDF generations in Printward-demo showed that the
+  **packing-slip file named for `2001521` contains order `2000949` and the
+  Malmö customer's details**, while the **attachment correctly contains
+  Restore Greens order `2001521`**. The PDF mismatch existed before Printward
+  printed the section; the slip object was generated around 07:00 local time.
+  Printward's own-car transform stamped the snapshot's `ZBU 16U` over the
+  wrongly stored Malmö slip, which explains the physical paper and why
+  `2001521` was marked printed without its own slip. The separate `2000949`
+  freight job was classified as Eriksson, and the current PDF stored as
+  `2/order2000949.pdf` shows Eriksson. The cause of the upstream wrong-content
+  upload is not yet established.
+- Printward currently trusts the storage object name as document identity;
+  snapshot creation does not inspect PDF contents. A local, undeployed guard
+  now checks the `Ordernr` header on every page of a job-authorized own-car
+  Visma slip before stamping its registration. It rejected the actual bad
+  `order2001521.pdf` with "contains order 2000949, but the print job expects
+  2001521"; synthetic regression coverage also passes. This guard does not
+  repair already printed jobs or validate unstamped external slips.
+  The operator exported a fresh two-page Visma `Orderhantering Lager.pdf` at
+  14:36 on 2026-11-09. Page 1 is the correct Restore Greens slip for `2001521`;
+  page 2 is a party attachment. The existing separate Printward party attachment
+  is already correct, so a local one-page recovery candidate was made from
+  page 1 only (`tmp/pdfs/recovered-order2001521.pdf`). It retains the Visma
+  title, author, and creator, and the guard now accepts that export title only
+  with the same verified form geometry, transport field, and matching order
+  number. The candidate passed the actual stamping check and rejected a wrong
+  expected order number. It has not been uploaded. Reprinting must use a new
+  single-order job after replacement; do not retry the 63-order batch. No agent
+  update or deployment was initiated during this investigation.
+- `npm test` could not run because npm is unavailable on this host. The bundled
+  Node 24 runtime ran `node --test` successfully (158 passed, 0 failed) after
+  adding the verified warehouse export form and route-17 precedence case.

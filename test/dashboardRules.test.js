@@ -50,6 +50,27 @@ test('cash payment on the order blocks slip packets for own cars and chains rega
   assert.equal(planDashboardPrintSelection([cash, credit], 'dispatch', 'morning', ['202']).valid, true);
 });
 
+test('Saturday route 17 has its own slip group and server-validated print selection', () => {
+  const documents = {
+    packingSlip: { name: 'order300.pdf', printStatus: 'pending' },
+    attachment: { name: 'parti300.pdf', printStatus: 'pending' }
+  };
+  const saturday = { orderNumber: '300', context: { deliveryMethod: 17, dispatchPriority: 8, distributorNo: 0 }, documents };
+  const saturdayAfternoon = { orderNumber: '303', context: { deliveryMethod: 17, dispatchPriority: 16, distributorNo: 0 }, documents };
+  const saturdayWithoutTime = { orderNumber: '304', context: { deliveryMethod: 17, dispatchPriority: null, distributorNo: 0 }, documents };
+  const ordinary = { orderNumber: '301', context: { deliveryMethod: 1, dispatchPriority: 8, distributorNo: 0 }, documents };
+  const external = { orderNumber: '302', context: { deliveryMethod: 17, dispatchPriority: 8, distributorNo: 7331697 }, documents };
+  const { slots } = summarizeOwnDispatch([saturday, saturdayAfternoon, saturdayWithoutTime, ordinary, external]);
+  assert.equal(dispatchSlotForContext(saturday.context), 'saturday');
+  assert.deepEqual(slots.saturday.orders.map(({ order }) => order.orderNumber), ['300', '302', '303', '304']);
+  assert.deepEqual(slots.early.orders.map(({ order }) => order.orderNumber), ['301']);
+  assert.equal(planDashboardPrintSelection([saturday, ordinary, external], 'dispatch', 'saturday', ['300']).valid, true);
+  assert.equal(planDashboardPrintSelection([saturdayAfternoon, saturdayWithoutTime], 'dispatch', 'saturday', ['303', '304']).valid, true);
+  assert.equal(planDashboardPrintSelection([saturday, ordinary, external], 'dispatch', 'early', ['300']).valid, false);
+  assert.equal(planDashboardPrintSelection([saturday, ordinary, external], 'dispatch', 'saturday', ['302']).valid, true);
+  assert.equal(freightPanelForOrder(external), null);
+});
+
 test('places routes 25 and 49 in Eriksson before the Kyl & Frys supplier rule', () => {
   assert.equal(freightPanelForOrder({ context: { deliveryMethod: 25, routeGroup: 4, distributorNo: 7331697 } }), 'eriksson');
   assert.equal(freightPanelForOrder({ context: { deliveryMethod: 49, deliveryMethodName: 'K&F Danmark 13:00', distributorNo: 7331697 } }), 'eriksson');

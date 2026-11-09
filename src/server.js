@@ -432,7 +432,9 @@ function findJobDocument(job, name, source, generation = '') {
     for (const document of order.documents || []) {
       if (document.name === name
         && (document.source || 'primary') === source
-        && String(document.generation || '') === String(generation || '')) return document;
+        && String(document.generation || '') === String(generation || '')) {
+        return { document, orderNumber: order.orderNumber };
+      }
     }
   }
   return null;
@@ -1865,7 +1867,8 @@ async function handleApi(req, res, requestUrl, context) {
 
     const jobId = requestUrl.searchParams.get('jobId') || '';
     const job = jobId ? await store.getJob(jobId) : null;
-    const jobDocument = findJobDocument(job, name, source, generation);
+    const jobMatch = findJobDocument(job, name, source, generation);
+    const jobDocument = jobMatch?.document;
     if (jobId && !jobDocument) {
       sendJson(res, 409, { error: 'The requested document version is not in this print job.' });
       return;
@@ -1898,7 +1901,7 @@ async function handleApi(req, res, requestUrl, context) {
     }
 
     if (jobDocument?.type === 'packingSlip' && jobDocument.routeRegistration) {
-      body = await stampVismaPackingSlipRegistration(body, jobDocument.routeRegistration);
+      body = await stampVismaPackingSlipRegistration(body, jobDocument.routeRegistration, jobMatch.orderNumber);
       transformed = true;
     }
 

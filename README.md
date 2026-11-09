@@ -115,6 +115,10 @@ reported in Alla order. The green count includes only unprinted orders whose
 packing slip and attachment exist and whose packing is complete. Each card
 shows **redo för utskrift av N order**, **registrerat utskrivna**, and
 **ännu inte redo**; the `N` is the number of orders in that own-car time slot.
+The separate **Lördag** card selects every order with `DelMt=17` regardless of `DelPri`
+and excludes those orders from Tidig/FM/EM. It shares their slip-and-attachment
+readiness, print selection, and status rules. On wide screens it sits immediately
+left of a half-width Returer card in the middle column of the lower row.
 The top **Alla order** counter instead includes every order in the selected
 date's source data, including orders outside the visible print groups. Tracked
 freight cards show **X av N order utskrivna** using registered Printward print
@@ -137,8 +141,16 @@ the stored Visma packing-slip PDF; the original GCS PDF and the partibilaga
 are unchanged. This is needed because a PDF generated before rerouting can
 still show the customer's old delivery method even when current Visma/Printward
 shows the vehicle. The replacement is deliberately limited to visually
-verified Visma `Följesedel NettoNetto` exports with Visma metadata, the expected
-transport-field position and A4 page size. The number in the exported filename
+verified Visma `Följesedel NettoNetto` or `Orderhantering Lager` exports with
+Visma metadata, the expected transport-field position and A4 page size. A
+warehouse export may include a party attachment on later pages; a recovery
+packing-slip object must contain only the slip pages because Printward stores
+the attachment separately. A job-authorized own-car download
+also checks that the `Ordernr` printed on every page matches the order in the
+job snapshot before stamping the registration. A mismatched PDF stops that
+document download instead of printing another customer's slip under the
+wrong order. The guard is active only in service revisions that include this
+change. The number in the exported filename
 varies between jobs and is not an eligibility check. Unknown layouts fail closed rather
 than printing a potentially wrong route. A plain PDF preview still shows the
 original source document; only a job-authorized download is stamped. A print
@@ -359,7 +371,14 @@ the next section. The final job callback waits for those reports. This can
 remove cloud-reporting pauses from multi-order runs, but each separately
 stapled section still requires its own Windows job and spool confirmation.
 Physical speed and finishing must be checked after a separate agent update.
-The planned replacement printer also needs its own queue/finishing validation.
+The replacement IM C5510 queue on Kontor W10 was configured and physically
+validated for one simplex, stapled two-sheet demo order on 2026-11-02. See the
+handoff for the exact queue and remaining workstation checks.
+Jonas's PC was then configured with the same dedicated queue name,
+`KF-Lager-IMC5510`, at `10.3.3.71`, black and white, simplex, one copy, and
+upper-left stapling. A single Printward-demo order was physically confirmed
+as two separate one-sided sheets stapled together. The old queues remain
+available; see the handoff for the workstation-specific evidence.
 The Windows installer writes the agent start command and Startup launcher with
 `%LOCALAPPDATA%` expanded at runtime, so Windows profile paths with non-ASCII
 characters work even though those launcher files are ASCII. If installation
