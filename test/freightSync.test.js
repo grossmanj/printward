@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 
 import { fetchBookedFreightShipments, mergePdfBuffers, syncFreightDocuments } from '../src/freightSync.js';
 import { analyzeFreightBookingPdf, analyzeKylPalletPdf, createPlaceholderPdf } from '../src/pdf.js';
@@ -543,4 +544,211 @@ test('Kyl repair refuses broad runs before nShift calls', async () => {
     nshiftClient: { async printDocuments() { calls += 1; return []; } }
   }), /requires NSHIFT_ALLOW_ALL=false, an explicit order allow-list/);
   assert.equal(calls, 0);
+});
+
+test('a new Kyl pallet records its booking set for a later frozen booking', async () => {
+  let palletOptions;
+  await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }] }],
+    storage: {
+      async getObjectMetadata() { return null; },
+      async uploadObjectIfChanged(name, _body, options) {
+        if (name.includes('pallet')) palletOptions = options;
+        return { uploaded: true };
+      }
+    },
+    nshiftClient: { async printDocuments(numbers) {
+      return [{ name: 'pallet.pdf', contentType: 'application/pdf', body: await kylPacket(numbers[0]) }];
+    } }
+  });
+  assert.match(palletOptions.metadata.printwardKylBookingSignature, /^[a-f0-9]{64}$/);
+  assert.equal(palletOptions.ifGenerationMatch, '0');
+});
+
+test('a later frozen booking automatically replaces a tagged chilled-only Eriksson pallet', async () => {
+  const oldBody = await kylPacket('CHILLED-1');
+  let metadata = { printwardKylBookingSignature: 'old-booking-set' };
+  const calls = [];
+  let uploaded;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', deliveryMethod: 25,
+      distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata(name) {
+        return { generation: name.includes('pallet') ? 'old-pallet' : 'old-freight',
+          metageneration: '1', metadata };
+      },
+      async getObject(name, _source, generation) {
+        assert.equal(name, 'pallet2003001.pdf');
+        assert.equal(generation, 'old-pallet');
+        return { body: oldBody };
+      },
+      async patchObjectMetadata(name, changes, preconditions) {
+        assert.equal(name, 'pallet2003001.pdf');
+        assert.deepEqual(preconditions, { generation: 'old-pallet', metageneration: '1' });
+        metadata = changes;
+        return { generation: 'old-pallet', metageneration: '2', metadata };
+      },
+      async uploadObjectIfChanged(name, body, options) {
+        uploaded = { name, body, options };
+        return { uploaded: true };
+      }
+    },
+    nshiftClient: { async printDocuments(numbers) {
+      calls.push(numbers[0]);
+      return [{ name: 'pallet.pdf', contentType: 'application/pdf',
+        body: await kylPacket(numbers[0], numbers[0] === 'FROZEN-1' ? 'frozen' : 'fresh') }];
+    } }
+  });
+  assert.equal(result.failed, 0);
+  assert.deepEqual(calls, ['CHILLED-1', 'FROZEN-1']);
+  assert.match(metadata.printwardKylRetrySignature, /^[a-f0-9]{64}$/);
+  assert.equal(uploaded.options.ifGenerationMatch, 'old-pallet');
+  assert.equal(uploaded.options.metadata.printwardKylBookingSignature, metadata.printwardKylRetrySignature);
+  const analysis = await analyzeKylPalletPdf(uploaded.body, {
+    freightConsignmentFresh: 'CHILLED-1', freightConsignmentFrozen: 'FROZEN-1'
+  });
+  assert.deepEqual(analysis.coolingLabelPages, [1]);
+  assert.deepEqual(analysis.frozenLabelPages, [3]);
+});
+
+test('automatic Kyl repair leaves old untagged PDFs untouched', async () => {
+  let nshiftCalls = 0;
+  let pdfReads = 0;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '1999750', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'legacy' }; },
+      async getObject() { pdfReads += 1; return { body: await kylPacket('CHILLED-1') }; }
+    },
+    nshiftClient: { async printDocuments() { nshiftCalls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(pdfReads, 0);
+  assert.equal(nshiftCalls, 0);
+});
+
+test('a complete legacy one-booking pallet is tagged without a PDF replacement', async () => {
+  let nshiftCalls = 0;
+  let uploads = 0;
+  let patched;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'legacy', metageneration: '1' }; },
+      async getObject() { return { body: await kylPacket('CHILLED-1') }; },
+      async patchObjectMetadata(_name, metadata, preconditions) {
+        patched = { metadata, preconditions };
+        return { generation: 'legacy', metadata };
+      },
+      async uploadObjectIfChanged() { uploads += 1; return { uploaded: true }; }
+    },
+    nshiftClient: { async printDocuments() { nshiftCalls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(uploads, 0);
+  assert.equal(nshiftCalls, 0);
+  assert.match(patched.metadata.printwardKylBookingSignature, /^[a-f0-9]{64}$/);
+  assert.deepEqual(patched.preconditions, { generation: 'legacy', metageneration: '1' });
+});
+
+test('automatic Kyl repair backs off after a failed attempt for the same booking set', async () => {
+  let nshiftCalls = 0;
+  const newSignature = createHash('sha256').update(JSON.stringify([
+    'fresh:CHILLED-1', 'frozen:FROZEN-1'
+  ])).digest('hex');
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'old-pallet', metadata: {
+        printwardKylBookingSignature: 'old-booking-set',
+        printwardKylRetrySignature: newSignature,
+        printwardKylRetryAfter: '2999-01-01T00:00:00.000Z'
+      } }; },
+      async getObject() { throw new Error('Should not read during retry cooldown.'); }
+    },
+    nshiftClient: { async printDocuments() { nshiftCalls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(nshiftCalls, 0);
+});
+
+test('a complete Kyl PDF with stale booking metadata is retagged without nShift', async () => {
+  const completeBody = await mergePdfBuffers([
+    await kylPacket('CHILLED-1'), await kylPacket('FROZEN-1', 'frozen')
+  ]);
+  let patched;
+  let calls = 0;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'complete', metageneration: '1', metadata: {
+        printwardKylBookingSignature: 'outdated'
+      } }; },
+      async getObject() { return { body: completeBody }; },
+      async patchObjectMetadata(_name, metadata) {
+        patched = metadata;
+        return { generation: 'complete', metadata };
+      }
+    },
+    nshiftClient: { async printDocuments() { calls += 1; return []; } }
+  });
+  assert.equal(result.skipped, 1);
+  assert.equal(calls, 0);
+  assert.match(patched.printwardKylBookingSignature, /^[a-f0-9]{64}$/);
+});
+
+test('a failed automatic Kyl repair retains the old PDF and records retry cooldown', async () => {
+  const oldBody = await kylPacket('CHILLED-1');
+  let uploads = 0;
+  let retryMetadata;
+  const result = await syncFreightDocuments({ nshift: {
+    outputBucket: 'test-bucket', allowAll: true, dryRun: false,
+    repairKylOnBookingChange: true, syncLimit: 1, palletFetchEnabled: true
+  } }, {
+    shipments: [{ orderNumber: '2003001', distributorName: 'Kyl- och Frysexpressen Mälardalen AB',
+      consignments: [{ kind: 'fresh', consignmentNo: 'CHILLED-1' }, { kind: 'frozen', consignmentNo: 'FROZEN-1' }] }],
+    storage: {
+      async getObjectMetadata() { return { generation: 'old', metageneration: '1', metadata: {
+        printwardKylBookingSignature: 'chilled-only'
+      } }; },
+      async getObject() { return { body: oldBody }; },
+      async patchObjectMetadata(_name, metadata) {
+        retryMetadata = metadata;
+        return { generation: 'old', metadata };
+      },
+      async uploadObjectIfChanged() { uploads += 1; return { uploaded: true }; }
+    },
+    nshiftClient: { async printDocuments(numbers) {
+      return [{ name: 'pallet.pdf', contentType: 'application/pdf', body: oldBody }];
+    } }
+  });
+  assert.equal(result.failed, 1);
+  assert.equal(uploads, 0);
+  assert.match(retryMetadata.printwardKylRetrySignature, /^[a-f0-9]{64}$/);
+  assert.ok(Date.parse(retryMetadata.printwardKylRetryAfter) > Date.now());
 });

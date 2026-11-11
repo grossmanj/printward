@@ -121,6 +121,8 @@ export function loadConfig(env = process.env) {
       dsvLabelTestConsignmentNumbers: parseList(env.NSHIFT_DSV_LABEL_TEST_CONSIGNMENT_NUMBERS, []),
       repairExistingDsv: String(env.NSHIFT_DSV_REPAIR_EXISTING || 'false').toLowerCase() === 'true',
       repairExistingKyl: String(env.NSHIFT_KYL_REPAIR_EXISTING || 'false').toLowerCase() === 'true',
+      repairKylOnBookingChange: String(env.NSHIFT_KYL_REPAIR_ON_BOOKING_CHANGE || 'false').toLowerCase() === 'true',
+      kylRepairRetryMinutes: Number(env.NSHIFT_KYL_REPAIR_RETRY_MINUTES || 60),
       palletCopyFields: parseList(env.NSHIFT_PALLET_COPY_FIELDS, DEFAULT_PALLET_COPY_FIELDS),
       palletDocumentDistributors: parseList(env.NSHIFT_PALLET_DOCUMENT_DISTRIBUTORS, DEFAULT_PALLET_DOCUMENT_DISTRIBUTORS),
       timeoutMs: Number(env.NSHIFT_TIMEOUT_MS || 30_000),

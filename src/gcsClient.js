@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { createPlaceholderPdf } from './pdf.js';
 
@@ -85,6 +85,10 @@ export class MockGcsClient {
   async getObjectMetadata(name, source = 'primary') {
     const objects = await this.listObjects();
     return objects.find((item) => item.name === name && item.source === source) || null;
+  }
+
+  async patchObjectMetadata(_name, metadata) {
+    return { metadata };
   }
 
   async uploadObjectIfChanged(name, body, options = {}) {
@@ -195,7 +199,7 @@ export class GcsClient {
     const url = new URL(
       `${this.config.apiBase}/b/${encodeURIComponent(this.config.bucket)}/o/${encodeObjectName(name)}`
     );
-    url.searchParams.set('fields', 'name,size,updated,generation,contentType,md5Hash,metadata');
+    url.searchParams.set('fields', 'name,size,updated,generation,metageneration,contentType,md5Hash,metadata');
 
     try {
       const response = await this.request(url);
@@ -212,20 +216,54 @@ export class GcsClient {
     }
 
     const url = new URL(`${uploadApiBase(this.config.apiBase)}/b/${encodeURIComponent(this.config.bucket)}/o`);
-    url.searchParams.set('uploadType', 'media');
-    url.searchParams.set('name', name);
+    const withMetadata = options.metadata && Object.keys(options.metadata).length > 0;
+    url.searchParams.set('uploadType', withMetadata ? 'multipart' : 'media');
+    if (!withMetadata) url.searchParams.set('name', name);
+    if (options.ifGenerationMatch !== undefined) {
+      url.searchParams.set('ifGenerationMatch', String(options.ifGenerationMatch));
+    }
     url.searchParams.set('fields', 'name,size,updated,generation,contentType,md5Hash');
+
+    const contentType = options.contentType || 'application/octet-stream';
+    const boundary = withMetadata ? `printward_${randomUUID().replace(/-/g, '')}` : '';
+    const metadataPart = withMetadata
+      ? `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({
+          name, contentType, metadata: options.metadata
+        })}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`
+      : '';
+    const uploadBody = withMetadata
+      ? Buffer.concat([
+          Buffer.from(metadataPart),
+          Buffer.isBuffer(body) ? body : Buffer.from(body),
+          Buffer.from(`\r\n--${boundary}--\r\n`)
+        ])
+      : body;
 
     const response = await this.request(url, {
       method: 'POST',
       headers: {
-        'content-type': options.contentType || 'application/octet-stream',
-        'content-length': String(body.length)
+        'content-type': withMetadata ? `multipart/related; boundary=${boundary}` : contentType,
+        'content-length': String(uploadBody.length)
       },
-      body
+      body: uploadBody
     });
     const payload = await response.json();
     return normalizeListedObject(payload, this.source);
+  }
+
+  async patchObjectMetadata(name, metadata, { generation, metageneration } = {}) {
+    const url = new URL(
+      `${this.config.apiBase}/b/${encodeURIComponent(this.config.bucket)}/o/${encodeObjectName(name)}`
+    );
+    if (generation) url.searchParams.set('ifGenerationMatch', String(generation));
+    if (metageneration) url.searchParams.set('ifMetagenerationMatch', String(metageneration));
+    url.searchParams.set('fields', 'name,generation,metageneration,metadata,updated');
+    const response = await this.request(url, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ metadata })
+    });
+    return response.json();
   }
 
   async uploadObjectIfChanged(name, body, options = {}) {
@@ -233,7 +271,22 @@ export class GcsClient {
     const hash = md5Base64(buffer);
     const current = await this.getObjectMetadata(name);
 
+    if (options.ifGenerationMatch !== undefined
+        && String(current?.generation || '0') !== String(options.ifGenerationMatch)) {
+      const error = new Error(`GCS object generation changed before uploading ${name}.`);
+      error.statusCode = 412;
+      throw error;
+    }
+
     if (current?.md5Hash === hash) {
+      const metadataChanged = options.metadata && Object.entries(options.metadata)
+        .some(([key, value]) => current.metadata?.[key] !== value);
+      if (metadataChanged) {
+        await this.patchObjectMetadata(name, { ...(current.metadata || {}), ...options.metadata }, {
+          generation: current.generation,
+          metageneration: current.metageneration
+        });
+      }
       return {
         uploaded: false,
         skipped: true,

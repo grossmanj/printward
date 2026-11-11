@@ -1,6 +1,6 @@
 # Agent handoff
 
-Last reviewed: 2026-11-09. The historical baseline was commit `4d8d9c6`
+Last reviewed: 2026-11-11. The historical baseline was commit `4d8d9c6`
 (`Allow early external freight printing`). Later behavior, staged work, and
 live deployment evidence are recorded in the dated sections below. GitHub
 repository: [grossmanj/printward](https://github.com/grossmanj/printward).
@@ -1951,3 +1951,53 @@ are verification needs, not claims that the running system is broken.
   batch. The upstream reason a Malmö slip was stored under Restore Greens's
   object name remains unknown. The new order-number guard covers own-car Visma
   slips during job preparation; it does not validate unstamped freight slips.
+
+### 2026-11-11 Kyl and Eriksson PDFs with missing frozen pages (local fix, not deployed)
+
+- Edmark reported five Kyl & Frys orders (`1999750`, `1999719`, `1999800`,
+  `2001881`, `2000852`) and three Eriksson orders (`1999721`, `2001467`,
+  `2001469`) blocked by `No Frozen label pages detected`. Read-only GCS
+  generation downloads confirmed that all eight stored pallet PDFs have four
+  pages: one cooling label and three cooling waybill pages, with no frozen
+  pages. The PDF generations date from November 2–9; none was refreshed on
+  November 11. Current scheduled-job log entries show **two booking numbers**
+  for each order yet report `existing=true`, `skipped=true`, `uploaded=false`.
+  The same supplier produces Eriksson's pallet document; its `DelMt` places it
+  on the Eriksson dashboard card. This is stale source content, not a printer
+  or stapling failure.
+- The live scheduled `printward-freight-sync` job still has
+  `NSHIFT_ALLOW_ALL=true`, `NSHIFT_FETCH_ENABLED=true`, and no
+  `NSHIFT_KYL_REPAIR_EXISTING` flag. It runs every five minutes but treats the
+  existing pallet PDF as complete without comparing its pages or booking set.
+  The owner explicitly said the eight historical orders are too late to repair;
+  no nShift call, GCS write, print job, or job deployment was made for them.
+- The scheduled job runs as `webshop-api@visma-274514.iam.gserviceaccount.com`;
+  read-only bucket IAM inspection showed `roles/storage.objectAdmin` on
+  `pdf-service-bucket`, which includes the object metadata update needed by
+  the proposed retry marker. This does not substitute for a live smoke check.
+- Local code now tags **new** Kyl/Eriksson pallet PDFs with a SHA-256 booking-set
+  signature in GCS object metadata. An opt-in scheduled mode,
+  `NSHIFT_KYL_REPAIR_ON_BOOKING_CHANGE=true`, checks tagged PDFs when SQL gains
+  another chilled/frozen booking. It verifies the stored generation, records a
+  retry cooldown before any nShift call, and replaces the PDF only after both
+  booking packets contain verified labels and waybills. The replacement uses
+  an `ifGenerationMatch` precondition. Failed nShift retrieval preserves the
+  existing PDF and is retried after `NSHIFT_KYL_REPAIR_RETRY_MINUTES` (default
+  60, minimum 15). Older untagged PDFs with one verified booking receive a
+  metadata marker without replacing their PDF, so a later second booking can
+  trigger repair. Untagged PDFs that already have two bookings remain
+  untouched, so enabling the mode does not repair Edmark's eight old orders.
+  The existing
+  explicit order-allow-listed repair remains available separately.
+- This work is in the local working tree. The new mode defaults off; the
+  scheduled job remains on its prior image and configuration. No GitHub push,
+  Cloud Run job deployment, scheduler edit, demo web deployment, nShift call,
+  physical print, or PR has been made. Synthetic tests cover the changed
+  booking set (including Eriksson `DelMt=25`), legacy exclusion, cooldown,
+  incomplete nShift response, multipart metadata upload, and generation-safe
+  metadata patch. Deployment and a live no-call smoke check remain separate
+  operational steps.
+- `npm test` could not start because `npm` is absent on this Mac. The bundled
+  Node runtime ran the equivalent `node --test` suite: **168 passed, 0 failed**.
+  `git diff --check` passed. No customer PDF or diagnostic file was added to
+  Git; generation-specific read-only copies remain under ignored `tmp/`.

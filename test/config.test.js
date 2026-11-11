@@ -46,6 +46,9 @@ test('nShift freight sync defaults to a separate freight prefix', () => {
   assert.equal(loadConfig({ NSHIFT_DSV_REPAIR_EXISTING: 'true' }).nshift.repairExistingDsv, true);
   assert.equal(config.nshift.repairExistingKyl, false);
   assert.equal(loadConfig({ NSHIFT_KYL_REPAIR_EXISTING: 'true' }).nshift.repairExistingKyl, true);
+  assert.equal(config.nshift.repairKylOnBookingChange, false);
+  assert.equal(loadConfig({ NSHIFT_KYL_REPAIR_ON_BOOKING_CHANGE: 'true' }).nshift.repairKylOnBookingChange, true);
+  assert.equal(config.nshift.kylRepairRetryMinutes, 60);
   assert.deepEqual(config.nshift.palletCopyFields, ['Val2', 'Val3', 'Val5', 'Val6']);
   assert.deepEqual(config.nshift.palletDocumentDistributors, ['Kyl- och Frysexpressen Mälardalen AB']);
 });

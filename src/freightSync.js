@@ -1,6 +1,28 @@
 import { GcsClient } from './gcsClient.js';
 import { NshiftConsignmentClient } from './nshiftClient.js';
 import { analyzeFreightBookingPdf, analyzeKylPalletPdf } from './pdf.js';
+import { createHash } from 'node:crypto';
+
+const KYL_BOOKING_SIGNATURE = 'printwardKylBookingSignature';
+const KYL_RETRY_SIGNATURE = 'printwardKylRetrySignature';
+const KYL_RETRY_AFTER = 'printwardKylRetryAfter';
+
+function kylBookingSignature(shipment) {
+  const bookings = (shipment.consignments || [])
+    .map(({ kind, consignmentNo }) => `${kind}:${consignmentNo}`)
+    .sort();
+  return createHash('sha256').update(JSON.stringify(bookings)).digest('hex');
+}
+
+async function patchKylMetadata(storage, name, object, changes) {
+  if (typeof storage.patchObjectMetadata !== 'function') {
+    throw new Error('Kyl booking-change repair requires generation-safe GCS metadata updates.');
+  }
+  return storage.patchObjectMetadata(name, { ...(object.metadata || {}), ...changes }, {
+    generation: object.generation,
+    metageneration: object.metageneration
+  });
+}
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -437,13 +459,18 @@ export async function syncFreightDocuments(config, overrides = {}) {
     const palletRequired = isPalletDocumentRequired(shipment, config.nshift);
     const palletObjectName = palletRequired ? outputObjectName(config.nshift.outputPrefix, shipment.orderNumber, 'pallet') : null;
     const palletCopies = Number(shipment.freightPalletCopies || 0);
+    const bookingSignature = palletRequired && !isDsvShipment(shipment)
+      ? kylBookingSignature(shipment) : null;
 
     try {
       let existingFreight = null;
       let existingPallet = null;
+      let palletGenerationBeforeRepair = '0';
+      let repairDeferred = false;
       if (!config.nshift.dryRun && !config.nshift.forceRefresh) {
         existingFreight = await getExistingObject(storage, objectName);
         existingPallet = palletObjectName ? await getExistingObject(storage, palletObjectName) : null;
+        if (existingPallet?.generation) palletGenerationBeforeRepair = String(existingPallet.generation);
         if (existingFreight && isDsvShipment(shipment) && config.nshift.repairExistingDsv === true) {
           if (typeof storage.getObject !== 'function') {
             throw new Error('DSV repair requires reading the existing PDF before any nShift call.');
@@ -458,6 +485,47 @@ export async function syncFreightDocuments(config, overrides = {}) {
           const existingPdf = await storage.getObject(palletObjectName, 'freight', existingPallet.generation || '');
           if (!await verifyKylPalletPdf(existingPdf.body, shipment)) existingPallet = null;
         }
+        if (existingPallet && bookingSignature && config.nshift.repairKylOnBookingChange === true
+            && config.nshift.repairExistingKyl !== true) {
+          const recordedSignature = existingPallet.metadata?.[KYL_BOOKING_SIGNATURE];
+          // A complete, one-booking legacy PDF can be tagged without replacing
+          // its content. Old two-booking gaps remain untouched.
+          if (!recordedSignature && shipment.consignments.length === 1) {
+            if (typeof storage.getObject !== 'function') {
+              throw new Error('Kyl booking-change repair requires reading the existing PDF before any nShift call.');
+            }
+            const existingPdf = await storage.getObject(palletObjectName, 'freight', existingPallet.generation || '');
+            if (await verifyKylPalletPdf(existingPdf.body, shipment)) {
+              existingPallet = await patchKylMetadata(storage, palletObjectName, existingPallet, {
+                [KYL_BOOKING_SIGNATURE]: bookingSignature
+              });
+            }
+          } else if (recordedSignature && recordedSignature !== bookingSignature) {
+            const retrySignature = existingPallet.metadata?.[KYL_RETRY_SIGNATURE];
+            const retryAfter = Date.parse(existingPallet.metadata?.[KYL_RETRY_AFTER] || '');
+            if (retrySignature === bookingSignature && Number.isFinite(retryAfter) && retryAfter > Date.now()) {
+              repairDeferred = true;
+            } else {
+              if (typeof storage.getObject !== 'function') {
+                throw new Error('Kyl booking-change repair requires reading the existing PDF before any nShift call.');
+              }
+              const existingPdf = await storage.getObject(palletObjectName, 'freight', existingPallet.generation || '');
+              if (await verifyKylPalletPdf(existingPdf.body, shipment)) {
+                existingPallet = await patchKylMetadata(storage, palletObjectName, existingPallet, {
+                  [KYL_BOOKING_SIGNATURE]: bookingSignature
+                });
+              } else {
+                const configuredRetry = Number(config.nshift.kylRepairRetryMinutes || 60);
+                const retryMinutes = Number.isFinite(configuredRetry) ? Math.max(15, configuredRetry) : 60;
+                await patchKylMetadata(storage, palletObjectName, existingPallet, {
+                  [KYL_RETRY_SIGNATURE]: bookingSignature,
+                  [KYL_RETRY_AFTER]: new Date(Date.now() + retryMinutes * 60_000).toISOString()
+                });
+                existingPallet = null;
+              }
+            }
+          }
+        }
         if (existingFreight && (!palletRequired || existingPallet)) {
           results.push({
             ok: true,
@@ -470,6 +538,7 @@ export async function syncFreightDocuments(config, overrides = {}) {
             uploaded: false,
             skipped: true,
             existing: true,
+            repairDeferred,
             generation: existingFreight.generation ? String(existingFreight.generation) : null,
             updated: existingFreight.updated || null,
             palletGeneration: existingPallet?.generation ? String(existingPallet.generation) : null,
@@ -511,7 +580,11 @@ export async function syncFreightDocuments(config, overrides = {}) {
           palletBytes = palletBody.length;
           palletUpload = config.nshift.dryRun
             ? { uploaded: false, skipped: true, dryRun: true, name: palletObjectName }
-            : await storage.uploadObjectIfChanged(palletObjectName, palletBody, { contentType: 'application/pdf' });
+            : await storage.uploadObjectIfChanged(palletObjectName, palletBody, {
+                contentType: 'application/pdf',
+                metadata: bookingSignature ? { [KYL_BOOKING_SIGNATURE]: bookingSignature } : undefined,
+                ifGenerationMatch: palletGenerationBeforeRepair
+              });
         }
       } else if (palletRequired && existingPallet) {
         palletUpload = { uploaded: false, skipped: true, existing: true, name: palletObjectName };

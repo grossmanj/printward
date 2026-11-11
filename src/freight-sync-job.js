@@ -20,6 +20,8 @@ try {
     outputPrefix: config.nshift.outputPrefix,
     dryRun: config.nshift.dryRun,
     palletFetchEnabled: config.nshift.palletFetchEnabled,
+    repairKylOnBookingChange: config.nshift.repairKylOnBookingChange,
+    kylRepairRetryMinutes: config.nshift.kylRepairRetryMinutes,
     palletPrintOperation: config.nshift.palletPrintOperation,
     palletPrintType: config.nshift.palletPrintType,
     palletCopyFields: config.nshift.palletCopyFields,
