@@ -1952,7 +1952,7 @@ are verification needs, not claims that the running system is broken.
   object name remains unknown. The new order-number guard covers own-car Visma
   slips during job preparation; it does not validate unstamped freight slips.
 
-### 2026-11-11 Kyl and Eriksson PDFs with missing frozen pages (local fix, not deployed)
+### 2026-11-11 Kyl and Eriksson PDFs with missing frozen pages (future fix deployed to demo and freight job)
 
 - Edmark reported five Kyl & Frys orders (`1999750`, `1999719`, `1999800`,
   `2001881`, `2000852`) and three Eriksson orders (`1999721`, `2001467`,
@@ -1965,12 +1965,13 @@ are verification needs, not claims that the running system is broken.
   The same supplier produces Eriksson's pallet document; its `DelMt` places it
   on the Eriksson dashboard card. This is stale source content, not a printer
   or stapling failure.
-- The live scheduled `printward-freight-sync` job still has
+- Before this deployment, the live scheduled `printward-freight-sync` job had
   `NSHIFT_ALLOW_ALL=true`, `NSHIFT_FETCH_ENABLED=true`, and no
-  `NSHIFT_KYL_REPAIR_EXISTING` flag. It runs every five minutes but treats the
-  existing pallet PDF as complete without comparing its pages or booking set.
-  The owner explicitly said the eight historical orders are too late to repair;
-  no nShift call, GCS write, print job, or job deployment was made for them.
+  `NSHIFT_KYL_REPAIR_EXISTING` flag. It treated an existing pallet PDF as
+  complete without comparing its pages or booking set. The owner explicitly
+  said the eight historical orders are too late to repair. They were excluded
+  from the new automatic repair path; no manual nShift call, GCS replacement,
+  or print job was made for them.
 - The scheduled job runs as `webshop-api@visma-274514.iam.gserviceaccount.com`;
   read-only bucket IAM inspection showed `roles/storage.objectAdmin` on
   `pdf-service-bucket`, which includes the object metadata update needed by
@@ -1989,14 +1990,30 @@ are verification needs, not claims that the running system is broken.
   untouched, so enabling the mode does not repair Edmark's eight old orders.
   The existing
   explicit order-allow-listed repair remains available separately.
-- This work is in the local working tree. The new mode defaults off; the
-  scheduled job remains on its prior image and configuration. No GitHub push,
-  Cloud Run job deployment, scheduler edit, demo web deployment, nShift call,
-  physical print, or PR has been made. Synthetic tests cover the changed
-  booking set (including Eriksson `DelMt=25`), legacy exclusion, cooldown,
-  incomplete nShift response, multipart metadata upload, and generation-safe
-  metadata patch. Deployment and a live no-call smoke check remain separate
-  operational steps.
+- Deployment evidence: commit `70e7110c1187b9f5404c084bb79a6670b78b72a0`
+  was pushed normally to `origin/demo`; the remote SHA was checked afterward.
+  Regional Cloud Build `1c0d4eb2-8970-47c7-aa7b-1bc832da6796` succeeded
+  with install, test, build, push, and deploy steps. Cloud Run `printward-demo`
+  revision `printward-demo-00049-fp6` served that image at 100% traffic.
+  The separate Cloud Run job `printward-freight-sync` was updated to the same
+  image and `NSHIFT_KYL_REPAIR_ON_BOOKING_CHANGE=true`,
+  `NSHIFT_KYL_REPAIR_RETRY_MINUTES=60`; its existing fetch and allow-all flags
+  remain enabled. Cloud Scheduler job `printward-freight-sync-every-5m` in
+  `europe-west1` remained enabled at `*/5 * * * *`; no scheduler edit was made.
+  There was no physical print, manual job execution, or PR.
+- First scheduled runs after deployment successfully tagged a verified legacy
+  one-booking pallet PDF (`pallet1985860.pdf`) with a booking signature while
+  retaining generation `1794268856142317`. The eight reported two-booking
+  pallet PDFs retained exactly their pre-deployment generations. A natural
+  changed-booking event has not yet been observed, so live replacement of a
+  newly incomplete pallet PDF is not yet verified. Scheduled executions still
+  exit 1 for order `2001940`: nShift booking `0070180278` lacks a verified
+  label or waybill. The identical error appeared every five minutes before
+  this deployment, so it is not evidence of a regression from this change.
+  The existing PDF is preserved. Synthetic tests cover the changed booking
+  set (including Eriksson `DelMt=25`), legacy exclusion, cooldown, incomplete
+  nShift response, multipart metadata upload, and generation-safe metadata
+  patch.
 - `npm test` could not start because `npm` is absent on this Mac. The bundled
   Node runtime ran the equivalent `node --test` suite: **168 passed, 0 failed**.
   `git diff --check` passed. No customer PDF or diagnostic file was added to
