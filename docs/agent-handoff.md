@@ -2019,7 +2019,7 @@ are verification needs, not claims that the running system is broken.
   `git diff --check` passed. No customer PDF or diagnostic file was added to
   Git; generation-specific read-only copies remain under ignored `tmp/`.
 
-### 2026-11-12 Explicit dashboard reprint (local, not deployed)
+### 2026-11-12 Explicit dashboard reprint (deployed to demo)
 
 - Edmark needs to select already printed orders again, particularly in Kyl &
   Frys. The browser now permits individual selection of printed orders in all
@@ -2038,6 +2038,10 @@ are verification needs, not claims that the running system is broken.
   not call nShift or start any physical print during development.
 - Focused plan and endpoint regressions cover ordinary rejection, explicit
   reprint, bulk Kyl reprint, and retained guards. The bundled Node runtime's
-  `node --test` passed **169/169**; `npm` is unavailable on this Mac. No push,
-  Cloud Run deployment, freight job update, scheduler change, or Windows agent
-  update was made for this change.
+  `node --test` passed **169/169**; `npm` is unavailable on this Mac. Commit
+  `67c009857571adb9bd50f5e87f3d4808d89ac89c` was pushed normally to
+  `origin/demo` and the remote SHA matched. Regional Cloud Build
+  `c8f76394-98ff-4597-82a5-f96b50f42527` succeeded, including its test and
+  deploy steps. Cloud Run revision `printward-demo-00051-7mr` serves that
+  image with 100% traffic. No physical reprint has yet been tested. The
+  freight job, scheduler, and Windows agents were not updated for this change.
