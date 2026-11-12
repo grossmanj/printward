@@ -246,6 +246,16 @@ Other carriers remain departure-only. The fictional mock order `900001` on
 `2026-06-24` demonstrates two bookings on one Kyl & Frys order. Real print
 actions require the dashboard print flag and the local Print Agent; selection
 and read-only review themselves do not print or call nShift.
+An already printed order can be selected individually for **Skriv ut valda igen**
+in the Kyl & Frys, DSV Finland, Eriksson, own-car, Saturday, and remote-chain
+lookups. Printed pickup, courier, taxi, and staff orders have a **Skriv ut igen**
+button. Order details offer the same explicit reprint. Quick-print and
+**Markera alla klara** still select only pending documents. A reprint requires a
+second confirmation, refreshes server-side eligibility and PDF verification,
+and sends the original document types to the local agent. Cash invoice,
+incomplete packing, missing source PDFs, and wrong-group selections remain
+blocked. Previously printed status remains visible until the new job confirms
+its sections; the new job is recorded as an explicit reprint.
 All three tracked freight cards use the same **med PDF** count: it means that
 an order has a stored freight/pallet file, not that its pages were verified or
 printed. A separate count shows current-generation print events registered by

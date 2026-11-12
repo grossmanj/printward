@@ -78,9 +78,10 @@ test('follow-slip lookup has clickable method bundles and searchable route codes
 test('freight bulk skips missing bookings while manual Kyl status can select their existing PDFs', () => {
   assert.match(script, /function hasTemperatureBooking\(order\)/);
   assert.match(script, /const selectableVisible = visibleItems\.filter\(freightManualMarkCandidate\)/);
-  assert.match(script, /const printableSelectedItems = selectedItems\.filter\(freightBulkCandidate\)/);
+  assert.match(script, /const printableSelectedItems = selectedItems\.filter\(\(item\) => freightBulkCandidate\(item, \{ allowPrinted: true \}\)\)/);
+  assert.match(script, /const reprintSelected = printableSelectedItems\.some\(\(item\) => item\.printStatus === 'printed'\)/);
   assert.match(script, /Ingen utskriftsbar bokning · ny utskrift spärrad/);
-  assert.match(script, /Markera alla med fraktdokument i listan/);
+  assert.match(script, /Markera alla som behöver utskrift/);
   assert.match(script, /printDashboardItems\(kind, panelId, label, items, \{ bulkFreight: kind === 'freight' \}\)/);
   assert.match(script, /bulkFreight: printableSelectedItems\.length > 1/);
   assert.match(script, /body: JSON\.stringify\(\{[^]*bulkFreight,/);

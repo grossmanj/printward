@@ -403,6 +403,18 @@ test('selected Kyl orders can be registered as already printed without creating 
   const repeated = await request(handler, '/api/dashboard/freight-mark-printed', { method: 'POST', body });
   assert.equal(repeated.status, 200);
   assert.deepEqual((await repeated.json()).alreadyPrinted, ['900001']);
+  const selection = { kind: 'freight', panelId: 'kyl-and-frys', deliveryDate: '2026-06-24', orderNumbers: ['900001'] };
+  const ordinary = await request(handler, '/api/dashboard/print-jobs', { method: 'POST', body: JSON.stringify(selection) });
+  assert.equal(ordinary.status, 409);
+  const reprint = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({ ...selection, allowReprint: true })
+  });
+  assert.equal(reprint.status, 201);
+  assert.deepEqual([...new Set((await reprint.json()).manifest.orders.map((order) => order.orderNumber))], ['900001']);
+  const bulkReprint = await request(handler, '/api/dashboard/print-jobs', {
+    method: 'POST', body: JSON.stringify({ ...selection, bulkFreight: true, allowReprint: true })
+  });
+  assert.equal(bulkReprint.status, 201);
 });
 
 test('manual freight status rejects stale, missing and unauthorized selections', async (t) => {

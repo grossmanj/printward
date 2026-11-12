@@ -22,6 +22,29 @@ test('dashboard print plan rejects wrong groups, unfinished slips, and already p
   assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['101', '101']).valid, false);
 });
 
+test('explicit reprint accepts printed packets in freight, own cars, chains and pickups without lifting other guards', () => {
+  const documents = { packingSlip: { name: 'order.pdf', printStatus: 'printed' },
+    attachment: { name: 'parti.pdf', printStatus: 'printed' } };
+  const own = { orderNumber: '301', context: { deliveryMethod: 1, dispatchPriority: 8 }, documents };
+  const chain = { orderNumber: '302', context: { deliveryMethod: 25, distributorNo: 7331697, customerChainNo: 41 }, documents };
+  const pickup = { orderNumber: '303', context: { deliveryMethod: 6 }, documents };
+  const freight = { orderNumber: '304', context: { distributorNo: 7331697, freightConsignmentFrozen: 'F-304' },
+    documents: { pallet: { name: 'pallet.pdf', printStatus: 'printed' } } };
+  const blocked = { ...own, orderNumber: '305', packingBlocked: true };
+  const cash = { ...own, orderNumber: '306', context: { ...own.context, orderPaymentTerm: 1 } };
+  const orders = [own, chain, pickup, freight, blocked, cash];
+  for (const [kind, panelId, number] of [
+    ['dispatch', 'early', '301'], ['chain', 'sushi-yama', '302'],
+    ['pickup', 'pickups', '303'], ['freight', 'kyl-and-frys', '304']
+  ]) {
+    assert.equal(planDashboardPrintSelection(orders, kind, panelId, [number]).valid, false);
+    assert.equal(planDashboardPrintSelection(orders, kind, panelId, [number], { allowReprint: true }).valid, true);
+  }
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['305'], { allowReprint: true }).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'dispatch', 'early', ['306'], { allowReprint: true }).valid, false);
+  assert.equal(planDashboardPrintSelection(orders, 'freight', 'dsv-finland', ['304'], { allowReprint: true }).valid, false);
+});
+
 test('cash payment on the order blocks slip packets for own cars and chains regardless of customer default', () => {
   const cash = {
     orderNumber: '201',

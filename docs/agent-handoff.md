@@ -2018,3 +2018,26 @@ are verification needs, not claims that the running system is broken.
   Node runtime ran the equivalent `node --test` suite: **168 passed, 0 failed**.
   `git diff --check` passed. No customer PDF or diagnostic file was added to
   Git; generation-specific read-only copies remain under ignored `tmp/`.
+
+### 2026-11-12 Explicit dashboard reprint (local, not deployed)
+
+- Edmark needs to select already printed orders again, particularly in Kyl &
+  Frys. The browser now permits individual selection of printed orders in all
+  document-printing dashboard lists: Kyl & Frys, DSV Finland, Eriksson,
+  Tidig/FM/EM/Lördag, and remote-chain slips. Pickup/courier/taxi/staff rows
+  and order details expose **Skriv ut igen**. Overview quick actions and
+  select-all still take only pending orders, avoiding accidental duplicate
+  batches. Returns, Best Transport, and Other carriers do not yet have a
+  verified Printward document-print flow and remain unchanged.
+- The browser sends `allowReprint: true` only for an explicit printed-order
+  selection. The server still refreshes Visma/GCS data, validates the exact
+  group/date/documents, verifies PDF packets, and keeps cash invoices,
+  unfinished packing, wrong groups, and missing PDFs blocked. Bulk freight
+  keeps its per-order skip behavior. Job notes record explicit reprint; print
+  status follows the existing callback and current PDF generation. This does
+  not call nShift or start any physical print during development.
+- Focused plan and endpoint regressions cover ordinary rejection, explicit
+  reprint, bulk Kyl reprint, and retained guards. The bundled Node runtime's
+  `node --test` passed **169/169**; `npm` is unavailable on this Mac. No push,
+  Cloud Run deployment, freight job update, scheduler change, or Windows agent
+  update was made for this change.

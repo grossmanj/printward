@@ -677,7 +677,7 @@ export async function verifyFreightPacket(storage, selectedOrders, plan) {
 // The overview's bulk freight action is best-effort per order. Never let an
 // incomplete booking/PDF make otherwise verified orders unprintable, and never
 // include a skipped order in the job snapshot or printed-status callback.
-export async function prepareBulkFreightPrint(storage, orders, panelId, orderNumbers) {
+export async function prepareBulkFreightPrint(storage, orders, panelId, orderNumbers, { allowReprint = false } = {}) {
   if (!Array.isArray(orderNumbers) || orderNumbers.length < 1 || orderNumbers.length > 200) {
     throw new Error('Select between 1 and 200 orders.');
   }
@@ -694,7 +694,7 @@ export async function prepareBulkFreightPrint(storage, orders, panelId, orderNum
     if (!hasText(order.context?.freightConsignmentFresh) && !hasText(order.context?.freightConsignmentFrozen)) {
       return { skipped: { orderNumber: number, reason: 'Bokningsnummer saknas.' } };
     }
-    const plan = planDashboardPrintSelection(orders, 'freight', panelId, [number]);
+    const plan = planDashboardPrintSelection(orders, 'freight', panelId, [number], { allowReprint });
     if (!plan.valid) {
       return { skipped: { orderNumber: number, reason: plan.errors.join(' ') } };
     }
@@ -1410,14 +1410,16 @@ async function handleApi(req, res, requestUrl, context) {
     try {
       if (body.kind === 'freight' && body.bulkFreight === true) {
         ({ snapshots, skipped } = await prepareBulkFreightPrint(
-          storage, currentOrders, body.panelId, body.orderNumbers
+          storage, currentOrders, body.panelId, body.orderNumbers,
+          { allowReprint: body.allowReprint === true }
         ));
         if (!snapshots.length) {
           sendJson(res, 409, { error: 'Inga kompletta fraktdokument kunde skrivas ut.', skipped });
           return;
         }
       } else {
-        const plan = planDashboardPrintSelection(currentOrders, body.kind, body.panelId, body.orderNumbers);
+        const plan = planDashboardPrintSelection(currentOrders, body.kind, body.panelId, body.orderNumbers,
+          { allowReprint: body.allowReprint === true });
         if (!plan.valid) {
           sendJson(res, 409, { error: 'The print selection is no longer valid.', errors: plan.errors });
           return;
@@ -1446,7 +1448,7 @@ async function handleApi(req, res, requestUrl, context) {
       printerName: body.printerName || '',
       options: body.options || {},
       orders: snapshots,
-      notes: `Dashboard ${body.kind}: ${body.panelId} (${deliveryDate})`,
+      notes: `Dashboard ${body.kind}: ${body.panelId} (${deliveryDate})${body.allowReprint === true ? ' · explicit reprint' : ''}`,
       callbackToken: randomToken()
     });
     eventHub.broadcast('print-job-created', {

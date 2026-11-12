@@ -357,7 +357,7 @@ export function summarizeChainPanels(orders = []) {
 
 // Re-evaluate every dashboard print selection on the server against fresh order
 // context. Browser counters and checkboxes are never authorization to print.
-export function planDashboardPrintSelection(orders = [], kind, panelId, orderNumbers = []) {
+export function planDashboardPrintSelection(orders = [], kind, panelId, orderNumbers = [], { allowReprint = false } = {}) {
   if (!Array.isArray(orderNumbers) || orderNumbers.length < 1 || orderNumbers.length > 200) {
     return { valid: false, errors: ['Select between 1 and 200 orders.'], orders: [] };
   }
@@ -370,7 +370,7 @@ export function planDashboardPrintSelection(orders = [], kind, panelId, orderNum
     const plan = planFreightDocumentSelection(orders, panelId, numbers);
     if (!plan.valid) return { ...plan, kind };
     const alreadyPrinted = plan.orders.filter((item) => item.document.printStatus === 'printed');
-    if (alreadyPrinted.length) {
+    if (alreadyPrinted.length && !allowReprint) {
       return { valid: false, errors: alreadyPrinted.map((item) => `Order ${item.orderNumber} is already printed.`), orders: [] };
     }
     return { ...plan, kind, documentTypes: ['pallet', 'freight'] };
@@ -398,9 +398,11 @@ export function planDashboardPrintSelection(orders = [], kind, panelId, orderNum
     const documents = [order.documents?.packingSlip, order.documents?.attachment];
     if (requiresCashInvoice(order.context)) {
       errors.push(`Order ${order.orderNumber} requires Visma invoice form 365; packing slips are blocked.`);
-    } else if (documents.every((document) => document?.printStatus === 'printed')) {
+    } else if (documents.every((document) => document?.printStatus === 'printed') && !allowReprint) {
       errors.push(`Order ${order.orderNumber} is already printed.`);
-    } else if (!ready || documents.some((document) => !document)) {
+    } else if ((!ready && !(allowReprint && documents.every((document) => document?.printStatus === 'printed')))
+      || documents.some((document) => !document)
+      || Boolean(order.packingBlocked || order.context?.packingBlocked)) {
       errors.push(`Order ${order.orderNumber} is not ready with both required documents.`);
     }
   }
